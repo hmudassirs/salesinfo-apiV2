@@ -114,19 +114,45 @@ def create_app(
     # actually hit; there was no HTTP-level span to distinguish them.
     # Optional dependency, matching the rest of this codebase's pattern
     # for OTel integrations: absence must not crash the app.
-    try:
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+    #
+    # Gated on the same env flags core.observability.otel.OpenTelemetryManager
+    # checks (OTEL_SDK_DISABLED, then PERF_EXPORT_OTEL) so that "OTel export
+    # is off" actually means off everywhere, not just for the tracer/meter
+    # this module sets up directly. Previously this call was unconditional:
+    # even with PERF_EXPORT_OTEL=false, every request still got instrumented
+    # and (depending on what the ambient OTEL_* env vars/global provider
+    # looked like) could still produce exporter connection-retry log spam
+    # that the flag was supposed to silence.
+    from core.observability.otel import _env_flag as _otel_env_flag
 
-        FastAPIInstrumentor.instrument_app(app)
-    except Exception:
+    if _otel_env_flag("OTEL_SDK_DISABLED", default=False):
         import logging
 
-        logging.getLogger(__name__).warning(
-            "opentelemetry-instrumentation-fastapi not installed or failed to "
-            "initialize; requests will not get a root trace span. "
-            "pip install opentelemetry-instrumentation-fastapi to enable.",
-            exc_info=True,
+        logging.getLogger(__name__).info(
+            "OTEL_SDK_DISABLED=true; skipping FastAPI OpenTelemetry "
+            "instrumentation."
         )
+    elif not _otel_env_flag("PERF_EXPORT_OTEL", default=True):
+        import logging
+
+        logging.getLogger(__name__).info(
+            "PERF_EXPORT_OTEL=false; skipping FastAPI OpenTelemetry "
+            "instrumentation to avoid noisy export logs."
+        )
+    else:
+        try:
+            from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+            FastAPIInstrumentor.instrument_app(app)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "opentelemetry-instrumentation-fastapi not installed or failed "
+                "to initialize; requests will not get a root trace span. "
+                "pip install opentelemetry-instrumentation-fastapi to enable.",
+                exc_info=True,
+            )
 
     # Store settings for use in routes/dependencies (e.g. JWT secret).
     app.state.settings = settings

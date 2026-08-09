@@ -34,6 +34,21 @@ import concurrent.futures
 import os
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+
+# Must run before any `core.*` import below. core.db.session imports
+# core.observability.otel at *module load time* (`_TRACER =
+# get_otel_manager().tracer`), which constructs the process-wide
+# OpenTelemetryManager singleton and calls .initialize() immediately --
+# reading OTEL_SDK_DISABLED / PERF_EXPORT_OTEL from os.environ right
+# then. Since that singleton only ever initializes once, loading
+# .env.dev any later than this (e.g. after `from core.app.api.app
+# import create_app`) means initialize() already ran against whatever
+# was in the real shell environment, and .env.dev's OTEL_SDK_DISABLED
+# has no effect -- it arrives too late to change a decision that's
+# already been made and cached.
+load_dotenv(".env.dev")
+
 import uvicorn
 from fastapi import FastAPI
 
@@ -43,10 +58,6 @@ from core.concurrency.cpu import recommended_sizing
 from core.concurrency.executors import configure_executors
 from core.db.config import DatabaseConfig, DatabaseSettings
 from core.db.settings import PoolSettings
-
-from dotenv import load_dotenv
-
-load_dotenv(".env.dev")   # add these two lines here, before any other project import
 
 
 # Historical note: this used to set ONE 300-worker default executor via

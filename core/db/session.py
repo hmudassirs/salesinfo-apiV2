@@ -432,6 +432,28 @@ class DatabaseSession:
         try:
             broken_connection = False
             yield session
+        except asyncio.CancelledError:
+            # A cancelled caller (client disconnect mid-request, task
+            # cancellation, Ctrl-C propagating through an in-flight
+            # request) can leave `session` mid-transaction. CancelledError
+            # is a BaseException, not an Exception, since Python 3.8 --
+            # it does NOT hit the `except Exception` branch below, so
+            # without this branch the connection used to go straight to
+            # `finally` and back into the pool with an open transaction
+            # still holding whatever row locks it had acquired (e.g. an
+            # auth rate-limit UPSERT). The next caller to acquire that
+            # same pooled connection and touch the same row would then
+            # hang indefinitely waiting on the lock -- surfacing far away
+            # as a client-side read timeout, with no server-side error at
+            # all, and only after the connection had already been quietly
+            # handed back as "healthy". Roll back like any other
+            # exception path so cancellation can't leak an open
+            # transaction into the pool.
+            try:
+                await session.rollback()
+            except Exception:
+                broken_connection = True
+            raise
         except Exception as exc:
             # P1-1: a connection-level failure (transport/connection
             # actually dead) must never go back to `_available` for the
@@ -508,6 +530,18 @@ class DatabaseSession:
         try:
             broken_connection = False
             yield session
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            # Same reasoning as the async path above: both are
+            # BaseException, not Exception, so they'd otherwise skip the
+            # rollback below and go straight to `finally`, handing a
+            # connection with an open transaction back to the pool for
+            # the next caller to silently inherit (and potentially block
+            # on, if it locked any rows).
+            try:
+                session.rollback()
+            except Exception:
+                broken_connection = True
+            raise
         except Exception as exc:
             broken_connection = is_connection_level_error(exc)
             if not broken_connection:

@@ -31,6 +31,7 @@ import argparse
 import asyncio
 import json
 import secrets
+import signal
 import statistics
 import time
 from dataclasses import asdict, dataclass
@@ -450,6 +451,64 @@ def save_report(report: dict, output_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------
+# Graceful shutdown
+# ---------------------------------------------------------------------
+
+
+def _install_graceful_sigint_handler() -> asyncio.Event:
+    """Turn a raw Ctrl+C into a cooperative shutdown signal instead of a
+    KeyboardInterrupt landing wherever the event loop happens to be.
+
+    Without this, hitting Ctrl+C mid-request tears the TCP connection
+    out from under whatever `await client.post(...)` was in flight --
+    the server sees an abrupt client disconnect and has to cancel that
+    request server-side (see core/db/session.py's CancelledError
+    handling for what that used to leave behind). That's now handled
+    safely on the server, but severing the connection mid-request is
+    still not something *this* script should court needlessly on every
+    Ctrl+C: it's cleaner to let the in-flight request finish, close the
+    httpx.AsyncClient normally, and still write out whatever partial
+    report was collected.
+
+    Sets `shutdown_event` on the *first* SIGINT and returns it for
+    callers to check between phases/checks; a *second* SIGINT re-raises
+    KeyboardInterrupt immediately for anyone who really wants to bail
+    right now rather than wait for the current request.
+
+    Returns:
+        The asyncio.Event that gets set on the first Ctrl+C.
+    """
+    shutdown_event = asyncio.Event()
+    sigint_count = 0
+    loop = asyncio.get_running_loop()
+
+    def _handle_sigint() -> None:
+        nonlocal sigint_count
+        sigint_count += 1
+        if sigint_count == 1:
+            print(
+                "\n⚠️  Shutting down gracefully — finishing the current "
+                "request/phase, then closing the connection and saving "
+                "whatever results were collected. Press Ctrl+C again to "
+                "quit immediately instead."
+            )
+            shutdown_event.set()
+        else:
+            print("\n⚠️  Forcing immediate exit.")
+            raise KeyboardInterrupt
+
+    try:
+        loop.add_signal_handler(signal.SIGINT, _handle_sigint)
+    except NotImplementedError:
+        # add_signal_handler isn't available on every platform/loop
+        # (e.g. Windows' default ProactorEventLoop) -- fall back to the
+        # old raw-KeyboardInterrupt behavior there rather than fail.
+        pass
+
+    return shutdown_event
+
+
+# ---------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------
 
@@ -530,6 +589,9 @@ async def main():
     smoke_results: Optional[list[CheckResult]] = None
     load_report: Optional[dict] = None
     dashboard_snapshot: Optional[dict] = None
+    interrupted = False
+
+    shutdown_event = _install_graceful_sigint_handler()
 
     async with httpx.AsyncClient(limits=limits, timeout=timeout) as client:
         api_key = args.api_key
@@ -546,18 +608,25 @@ async def main():
                 "No API key available. Pass --api-key or leave --auto-auth on."
             )
 
-        if not args.load_only:
+        # Checked between phases (not mid-phase): each phase is either
+        # one fast sequential run (smoke tests) or one already-fired
+        # batch of concurrent requests (load test) that's cleanest to
+        # let finish rather than sever partway through. Ctrl+C during a
+        # phase takes effect right after it completes, not instantly --
+        # a second Ctrl+C still bails out immediately for anyone who
+        # doesn't want to wait even that long.
+        if not args.load_only and not shutdown_event.is_set():
             smoke_results = await run_smoke_tests(
                 client, args.base_url, api_key, user_id or ""
             )
             print_smoke_report(smoke_results)
 
-        if not args.smoke_only:
+        if not args.smoke_only and not shutdown_event.is_set():
             load_report = await run_load_test(
                 client, args.base_url, api_key, args.concurrency, args.sql
             )
 
-        if args.dashboard_api_key:
+        if args.dashboard_api_key and not shutdown_event.is_set():
             print("Fetching server-side /debug/performance snapshot...")
             dashboard_snapshot = await fetch_dashboard_snapshot(
                 client, args.base_url, args.dashboard_api_key
@@ -565,12 +634,20 @@ async def main():
             if not dashboard_snapshot["available"]:
                 print(f"  (unavailable: {dashboard_snapshot['reason']})")
 
+        interrupted = shutdown_event.is_set()
+        # httpx.AsyncClient closes normally here (`async with` exit) --
+        # no in-flight request was severed to get here.
+
+    if interrupted:
+        print("Stopped early (Ctrl+C) — saving results collected so far.\n")
+
     report = build_report(
         args=args,
         smoke_results=smoke_results,
         load_report=load_report,
         dashboard_snapshot=dashboard_snapshot,
     )
+    report["run_metadata"]["interrupted"] = interrupted
     if args.output:
         output_path = Path(args.output)
     else:
