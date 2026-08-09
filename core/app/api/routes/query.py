@@ -17,6 +17,8 @@ from core.app.api.schemas import (
 )
 from core.app.health import HealthCheck
 from core.app.settings import AppSettings
+from core.auth.api_key_service import APIKeyService
+from core.auth.middleware import user_cache_metrics
 from core.observability.context import build_request_context
 from core.concurrency.executors import all_executor_metrics
 from core.caching.persistence_queue import persistence_metrics
@@ -68,6 +70,10 @@ async def health_check(
         cache_metrics = persistence_metrics()
         sampler = getattr(request.app.state, "adaptive_sampler", None)
         sampler_metrics = sampler.metrics() if sampler is not None else None
+        auth_metrics = {
+            "api_key_cache": APIKeyService.validation_cache_metrics(),
+            "user_cache": user_cache_metrics(),
+        }
 
         alerts = get_alert_evaluator().evaluate(
             pool_metrics=pool_metrics,
@@ -85,6 +91,7 @@ async def health_check(
             query_concurrency_metrics=concurrency_metrics,
             cache_persistence_metrics=cache_metrics,
             adaptive_sampler_metrics=sampler_metrics,
+            auth_metrics=auth_metrics,
             alerts=alerts,
         )
     except Exception:
@@ -177,6 +184,20 @@ async function refresh() {
         row('p50 / p95 / p99 wait (ms)', `${p.p50_wait_time_ms ?? '-'} / ${p.p95_wait_time_ms ?? '-'} / ${p.p99_wait_time_ms ?? '-'}`),
         row('timeouts', p.timed_out_acquires),
         row('broken evicted', p.broken_connections_evicted ?? 0),
+      ].join('')));
+    }
+    if (h.auth_metrics) {
+      const ak = h.auth_metrics.api_key_cache;
+      const uc = h.auth_metrics.user_cache;
+      cards.push(card('Auth: API Key Cache', [
+        row('hits', ak.cache_hits),
+        row('misses', ak.cache_misses),
+        row('inflight validations', ak.inflight_validations),
+      ].join('')));
+      cards.push(card('Auth: User Cache', [
+        row('hits', uc.cache_hits),
+        row('misses', uc.cache_misses),
+        row('inflight lookups', uc.inflight_user_lookups),
       ].join('')));
     }
     if (h.executor_metrics) {

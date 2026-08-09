@@ -6,9 +6,6 @@ requires-python = ">=3.9"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
-    "duckdb",
-    "duckdb-engine",
-    "sqlalchemy",
     "pydantic",
     "pydantic-settings",
     "python-dotenv",
@@ -43,4 +40,4 @@ ignore = [ "B905", "B008",]
 quote-style = "double"
 
 [tool.hatch.build.targets.wheel]
-packages = [ "core", "performance", "experimental",]
+packages = [ "core",]

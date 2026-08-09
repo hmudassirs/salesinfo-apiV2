@@ -107,7 +107,7 @@ class QueryResultCache:
         query_sql: str,
         result_data: List[Dict[str, Any]],
         params: tuple = (),
-        user_id: str = "",
+        user_id: Optional[str] = None,
         session_id: str = "",
         execution_time_ms: int = 0,
         ttl_seconds: int = 3600,  # 1 hour default

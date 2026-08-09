@@ -252,7 +252,7 @@ class QueryCacheCoordinator:
         sql: str,
         data: list,
         params: tuple,
-        user_id: str = "",
+        user_id: Optional[str] = None,
     ) -> None:
         """Write a freshly-executed result to L2. Callers should invoke
         this via `submit_persist_job`, not await it

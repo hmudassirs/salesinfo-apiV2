@@ -179,6 +179,22 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     for (var i = 0; i < list.length; i++) { if (list[i].name === name) return list[i]; }
     return null;
   }
+  function formatMetricLabel(histogram) {
+    if (!histogram) return "–";
+    var label = histogram.name;
+    var tagEntries = [];
+    if (histogram.tags && typeof histogram.tags === "object") {
+      Object.keys(histogram.tags).sort().forEach(function (key) {
+        tagEntries.push(key + "=" + histogram.tags[key]);
+      });
+    }
+    if (tagEntries.length) {
+      label += " {" + tagEntries.slice(0, 4).join(", ");
+      if (tagEntries.length > 4) label += ", …";
+      label += "}";
+    }
+    return label;
+  }
   function setText(id, text) { document.getElementById(id).textContent = text; }
 
   function render(data) {
@@ -218,7 +234,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     stageBody.innerHTML = "";
     data.histograms.forEach(function (h) {
       var tr = document.createElement("tr");
-      tr.innerHTML = "<td class='mono'>" + escapeHtml(h.name) + "</td>" +
+      tr.innerHTML = "<td class='mono'>" + escapeHtml(formatMetricLabel(h)) + "</td>" +
         "<td>" + h.count + "</td>" +
         "<td>" + fmtMs(h.mean) + "</td>" +
         "<td>" + fmtMs(h.p50) + "</td>" +

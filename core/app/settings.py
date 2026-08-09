@@ -12,13 +12,7 @@ logger = logging.getLogger(__name__)
 class AppSettings:
     """Application configuration settings."""
 
-    app_name: str = "preparedata"
-    debug: bool = False
     log_level: str = "INFO"
-    database_url: Optional[str] = None
-    service_db_path: str = "data/service.db"
-    pool_size: int = 5
-    max_overflow: int = 10
 
     # --- Auth / JWT ---
     # No hardcoded default: fail loudly rather than silently signing
@@ -156,13 +150,7 @@ class AppSettings:
         expensive_limit = os.getenv("EXPENSIVE_QUERY_CONCURRENCY_LIMIT")
 
         return cls(
-            app_name=os.getenv("APP_NAME", "preparedata"),
-            debug=os.getenv("DEBUG", "false").lower() == "true",
             log_level=os.getenv("LOG_LEVEL", "INFO"),
-            database_url=os.getenv("DATABASE_URL"),
-            pool_size=int(os.getenv("POOL_SIZE", "5")),
-            max_overflow=int(os.getenv("MAX_OVERFLOW", "10")),
-            service_db_path=os.getenv("SERVICE_DB_PATH", "data/service.db"),
             jwt_secret_key=jwt_secret_key,
             jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
             jwt_expiry_seconds=int(os.getenv("JWT_EXPIRY_SECONDS", "3600")),

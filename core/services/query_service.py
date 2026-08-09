@@ -129,7 +129,7 @@ class QueryService:
             return await self._execute_gated(sql, params, cost)
 
         async def _persist(data: list) -> None:
-            await self._cache.persist_l2(sql, data, params, user_id or "")
+            await self._cache.persist_l2(sql, data, params, user_id or None)
 
         result = await self._cache.get_or_execute(
             cache_key, _run_query, on_miss_persist=_persist, tables=tables

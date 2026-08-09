@@ -38,6 +38,7 @@ it now creates and updates a real OTel `Counter` per metric name.
 """
 
 import logging
+import os
 import time
 from contextlib import contextmanager
 from functools import wraps
@@ -51,6 +52,13 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +122,22 @@ class OpenTelemetryManager:
 
     def initialize(self) -> None:
         """Initialize OpenTelemetry providers."""
+        if _env_flag("OTEL_SDK_DISABLED", default=False):
+            logger.info(
+                "OpenTelemetry SDK disabled via OTEL_SDK_DISABLED; no tracer or meter will be initialized."
+            )
+            return
+
+        if _env_flag("PERF_EXPORT_OTEL", default=True):
+            logger.info(
+                "OpenTelemetry export enabled; tracing/metrics will be initialized."
+            )
+        else:
+            logger.info(
+                "PERF_EXPORT_OTEL=false; skipping OpenTelemetry tracer/meter initialization to avoid noisy export logs."
+            )
+            return
+
         # Create resource
         resource = Resource.create(
             {

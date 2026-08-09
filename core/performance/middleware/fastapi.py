@@ -30,6 +30,7 @@ from core.performance.adaptive_sampler import AdaptiveSampler, AdaptiveSamplerCo
 from core.performance.config import PerformanceConfig
 from core.performance.context import bind_profiler
 from core.performance.enums import PerformanceStage
+from core.performance.metric import MetricPoint, MetricType, MetricUnit
 from core.performance.registry import PerformanceRegistry, get_default_registry
 from core.performance.request_profiler import (
     STATUS_ERROR,
@@ -105,13 +106,26 @@ def install_performance_middleware(
                 response = await call_next(request)
                 status_code = response.status_code
                 return response
+            except asyncio.CancelledError:
+                status_code = 500
+                raise
+            except Exception:
+                status_code = 500
+                raise
             finally:
+                duration_seconds = time.perf_counter() - request_start
                 if sampler is not None:
                     sampler.record_outcome(
                         status_code=status_code,
-                        duration_seconds=time.perf_counter() - request_start,
+                        duration_seconds=duration_seconds,
                         was_sampled=False,
                     )
+                _emit_unsampled_request_duration(
+                    resolved_registry,
+                    request,
+                    status_code,
+                    duration_seconds,
+                )
 
         profiler = RequestProfiler(tags={"method": request.method})
         setattr(request.state, _STATE_ATTRIBUTE, profiler)
@@ -162,6 +176,32 @@ def _route_template(request: Request) -> str:
     route = request.scope.get("route")
     path_template = getattr(route, "path", None)
     return path_template or request.url.path
+
+
+def _emit_unsampled_request_duration(
+    registry: PerformanceRegistry,
+    request: Request,
+    status_code: int,
+    duration_seconds: float,
+) -> None:
+    """Record request duration for unsampled requests so dashboards can see real latency."""
+    duration_ns = int(duration_seconds * 1e9)
+    registry.ingest_metric_points(
+        [
+            MetricPoint(
+                name=MetricName("request"),
+                metric_type=MetricType.TIMER,
+                value=duration_ns,
+                timestamp_ns=int(time.time() * 1e9),
+                unit=MetricUnit.NANOSECONDS,
+                tags={
+                    "route": _route_template(request),
+                    "method": request.method,
+                    "status_code": str(status_code),
+                },
+            )
+        ]
+    )
 
 
 def get_request_profiler(request: Request) -> RequestProfiler | NullRequestProfiler:

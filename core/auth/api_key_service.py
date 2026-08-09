@@ -7,6 +7,9 @@ file did what without opening each one."""
 import asyncio
 
 from core.concurrency.executors import run_in_service_executor
+from core.performance.context import get_current_profiler
+from core.performance.enums import PerformanceStage
+from core.performance.types import MetricName
 import hashlib
 import secrets
 import time
@@ -41,11 +44,16 @@ class APIKeyService:
     # uvicorn workers or instances, each has its own independent cache,
     # so a revoke isn't instantly consistent across all of them either —
     # only a shared cache (e.g. Redis) would fix that.
-    # Not lock-protected: dict get/set is atomic enough under the GIL,
-    # and the worst case of a rare race is one redundant DB lookup, not
-    # a correctness problem.
+    # 
+    # This cache is single-flight protected as well: if many requests
+    # arrive simultaneously with the same raw API key and the entry is
+    # not in the cache, only one of them does the service-db validation.
     _validation_cache: dict = {}
+    _validation_lock = asyncio.Lock()
+    _validation_inflight: dict = {}
     _CACHE_TTL_SECONDS = 30.0
+    _validation_cache_hits: int = 0
+    _validation_cache_misses: int = 0
 
     def __init__(self, service_manager: ServiceManager):
         """Initialize API key service.
@@ -143,34 +151,77 @@ class APIKeyService:
         if cached is not None:
             validated, expires_at = cached
             if now_monotonic < expires_at:
+                profiler = get_current_profiler()
+                if profiler is not None:
+                    profiler.counter(MetricName("api_key_validation_cache_hit"))
+                self._validation_cache_hits += 1
                 return validated
             del self._validation_cache[api_key_hash]
 
-        now = int(time.time())
+        profiler = get_current_profiler()
+        if profiler is not None:
+            profiler.counter(MetricName("api_key_validation_cache_miss"))
+        self._validation_cache_misses += 1
+
+        loop = asyncio.get_running_loop()
+        is_leader = False
+        async with self._validation_lock:
+            fut = self._validation_inflight.get(api_key_hash)
+            if fut is None:
+                fut = loop.create_future()
+                self._validation_inflight[api_key_hash] = fut
+                is_leader = True
+
+        if not is_leader:
+            if profiler is not None:
+                with profiler.stage(
+                    PerformanceStage.SINGLE_FLIGHT_WAIT,
+                    MetricName("api_key_validation_wait"),
+                ):
+                    return await fut
+            return await fut
 
         try:
+            now = int(time.time())
             result = await run_in_service_executor(
                 self.service_manager.api_keys.validate, api_key_hash, now
             )
             if not result:
-                return None
+                validated = None
+            else:
+                validated = {
+                    "key_id": result["key_id"],
+                    "owner_id": result["owner_id"],
+                    "created_at": result["created_at"],
+                    "expires_at": result["expires_at"],
+                    "scopes": result["scopes"],
+                    "is_active": result["is_active"],
+                }
+                self._validation_cache[api_key_hash] = (
+                    validated,
+                    now_monotonic + self._CACHE_TTL_SECONDS,
+                )
 
-            validated = {
-                "key_id": result["key_id"],
-                "owner_id": result["owner_id"],
-                "created_at": result["created_at"],
-                "expires_at": result["expires_at"],
-                "scopes": result["scopes"],
-                "is_active": result["is_active"],
-            }
-            self._validation_cache[api_key_hash] = (
-                validated,
-                now_monotonic + self._CACHE_TTL_SECONDS,
-            )
+            if not fut.done():
+                fut.set_result(validated)
             return validated
-        except Exception as e:
-            logger.error(f"Error validating API key: {e}")
-            return None
+        except BaseException as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+            raise
+        finally:
+            async with self._validation_lock:
+                if self._validation_inflight.get(api_key_hash) is fut:
+                    del self._validation_inflight[api_key_hash]
+
+    @classmethod
+    def validation_cache_metrics(cls) -> dict[str, int]:
+        """Return per-process API key cache stats for diagnostics."""
+        return {
+            "cache_hits": cls._validation_cache_hits,
+            "cache_misses": cls._validation_cache_misses,
+            "inflight_validations": len(cls._validation_inflight),
+        }
 
     async def list_api_keys(self, owner_id: str) -> list[dict]:
         """List all API keys for a user (without showing raw keys).

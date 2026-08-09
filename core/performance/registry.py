@@ -101,6 +101,10 @@ class PerformanceRegistry:
         for collector in self._collectors.values():
             collector.collect(profile)
 
+    def ingest_metric_points(self, points: list[MetricPoint]) -> None:
+        """Ingest raw metric points without creating a full request profile."""
+        self.aggregator.ingest(points)
+
     def register_collector(self, collector: Collector) -> None:
         """Register a collector under its `name`, replacing any prior one."""
         self._collectors[collector.name] = collector

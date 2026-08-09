@@ -196,7 +196,7 @@ class RequestLogger:
             logger_name="http.request",
             module="api",
             function="middleware",
-            user_id=user_id or "",
+            user_id=user_id or None,
             request_id=request_id or "",
             session_id=session_id or "",
             ip_address=ip_address,

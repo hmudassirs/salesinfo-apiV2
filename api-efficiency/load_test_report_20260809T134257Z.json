@@ -1,0 +1,3038 @@
+{
+  "run_metadata": {
+    "generated_at": "2026-08-09T13:42:57.302129+00:00",
+    "base_url": "http://localhost:8000",
+    "concurrency": 500,
+    "sql": "SELECT 1 AS ok",
+    "smoke_only": false,
+    "load_only": false
+  },
+  "smoke_tests": {
+    "checks": [
+      {
+        "name": "GET /api/health",
+        "passed": true,
+        "detail": "status=200 body={\"status\":\"healthy\",\"db_connected\":true,\"pool_metrics\":{\"min_connections\":4,\"max_connections\":16,\"current_connections\":16,\"active_connections\":0,\"idle"
+      },
+      {
+        "name": "POST /api/query (SELECT 1)",
+        "passed": true,
+        "detail": "status=200 body={\"success\":true,\"data\":[{\"ok\":1}],\"error\":null,\"row_count\":1,\"cached\":true,\"truncated\":false}"
+      },
+      {
+        "name": "POST /api/query (repeat -> cached)",
+        "passed": true,
+        "detail": "cached=True"
+      },
+      {
+        "name": "GET /api/tables",
+        "passed": true,
+        "detail": "status=200 body={\"tables\":[\"_app_jwt_revocations\",\"_app_rate_limit_windows\",\"api_keys\",\"audit_log\",\"logs\",\"query_cache\",\"schema_migrations\",\"traces\",\"users\"],\"count\":"
+      },
+      {
+        "name": "GET /api/auth/keys/{owner_id}",
+        "passed": true,
+        "detail": "status=200 body={\"keys\":[{\"key_id\":\"key_1786282970_060e1a3e\",\"owner_id\":\"user_1786282970_db2d1137\",\"created_at\":1786282970,\"expires_at\":null,\"scopes\":\"read,write\",\"is"
+      },
+      {
+        "name": "5x rapid requests, same key (validation cache)",
+        "passed": true,
+        "detail": "statuses_ok=[True, True, True, True, True]"
+      },
+      {
+        "name": "POST /api/query (bad key -> 401)",
+        "passed": true,
+        "detail": "status=401"
+      },
+      {
+        "name": "POST /api/query (no key -> 401)",
+        "passed": true,
+        "detail": "status=401"
+      }
+    ],
+    "passed": 8,
+    "total": 8
+  },
+  "load_test": {
+    "sql": "SELECT 1 AS ok",
+    "concurrency": 500,
+    "total_requests": 500,
+    "wall_time_seconds": 6.734298119000414,
+    "throughput_req_per_sec": 74.24678729165261,
+    "succeeded": 500,
+    "failed": 0,
+    "status_code_counts": {
+      "200": 500
+    },
+    "latency_ms": {
+      "min": 366.597300999274,
+      "avg": 2732.2588277279992,
+      "max": 6645.8997190002265,
+      "p50": 2360.701257000528,
+      "p95": 6212.703161999978,
+      "p99": 6498.394976999589
+    },
+    "sample_failures": [],
+    "raw_requests": [
+      {
+        "status_code": 200,
+        "elapsed_ms": 366.597300999274,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 421.12440100027015,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 421.00260099959996,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 425.16770100064605,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 430.2955009998186,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 442.97910099976434,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 465.4030009996859,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 477.02090100028727,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 378.30070099971635,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 473.8180009999269,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 447.531300999799,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 451.4236009999877,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 459.6369010005219,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 457.72410099925764,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 488.8072009998723,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 458.32130100006907,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 452.8740010000547,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 467.1903009993912,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 473.51540100044076,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 484.82670100020187,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 484.8193010002433,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 498.0721009997069,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 505.8716010007629,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 500.8642009997857,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 504.76740100020834,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 511.0073009991538,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 515.7547010003327,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 461.7885010002283,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 507.619300999977,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5686.3282159993105,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 477.62860100010585,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 514.5040010002049,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 507.5152009994781,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 524.7773009996308,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 508.4707010000784,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6418.20591800024,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 542.6398009994955,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 513.012100999731,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 582.4769020000531,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4900.416114000109,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1012.5677029991493,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 554.4245010005397,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 525.436601000365,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 539.2816010007664,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 684.5053019997067,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 596.8491020003057,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 539.0900009997495,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5501.9594159994085,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 643.1054019994917,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 615.6183019993478,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4960.2105140002095,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 552.6118009993297,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 601.8227020003906,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 559.8775020007452,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 575.2532020005674,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6645.8997190002265,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5271.310115000233,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 574.2326019999382,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 913.6544029997822,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 637.7068020001389,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 623.1742020008824,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5038.434013999904,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 587.4386019995654,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 693.4515020002436,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 703.3579019998797,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 641.720302000067,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 637.4220019997665,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1228.4622030001628,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 721.9104019995939,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 669.822801999544,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 751.3838019995092,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 818.9789019997988,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 831.0232019994146,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 650.6196020000061,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5198.792615000457,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 864.9263019997306,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 713.5180020004555,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 670.893702000285,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5119.714315000238,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 710.2791019997312,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 691.7221020003126,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 767.7686019997054,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 698.8322020006308,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5527.439815999969,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 747.079402000054,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 757.4896020005326,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 850.4006020002635,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 717.6086019999275,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6333.07861799949,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 767.0544020002126,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 732.8524019994802,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 873.4702029996697,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 753.1905019995975,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 784.9454020006306,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6296.670018000441,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 875.6527030000143,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6574.818119000156,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 995.1468030003525,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1021.4830029999575,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 765.3279020005357,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 775.824201999967,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 781.9620020000002,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5141.983014999823,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 786.4057019996835,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5393.719215000601,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1182.1695029993862,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6575.913618999948,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 836.5512020000097,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 799.1030020002654,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1230.663504000404,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 882.5558030002867,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 834.2885019992536,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1337.653304000014,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1064.5914029992127,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 946.3906030005091,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1033.641403000729,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5238.322815000174,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 994.4706030000816,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 878.4781029999067,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 942.9596030004177,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 885.2568029997201,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 897.9756030003045,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 959.0410029995837,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5724.476516000323,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5366.033614999651,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1215.5967039998359,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1095.2896029994008,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1013.930103000348,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 965.1858030001677,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1181.982904000506,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1084.5420030000241,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1416.9945040002858,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1334.8172039995916,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 998.2016029998704,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1011.8417029998454,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5856.819517000076,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1099.9822030007635,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1030.423502999838,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5544.571116000043,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1253.181303999554,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1078.932103000625,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1097.5923030000558,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1068.4367029998612,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1128.476302999843,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1088.015302999338,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1186.7764039998292,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1410.962104000646,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6046.769216999564,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5640.670615999625,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1105.1969029995234,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1284.5343039998625,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1119.5319030002793,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1275.437903999773,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1129.5899030001237,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5381.415615000151,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1190.4615039993587,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1215.0500039997496,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1242.8050040007292,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1158.1867029999557,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1425.7861040005082,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1457.3732040007599,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1257.8965040002004,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1555.3929050001898,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1383.433703999799,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1355.0836039994465,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1206.6491039995526,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5847.039917000075,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1220.6408040001406,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1259.2854040003658,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1380.8494040004007,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1242.5168039999335,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6498.33131899959,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6002.045117000307,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6185.984718000327,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1418.3460039994316,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6349.545118000606,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1302.1439040003315,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1275.750404000064,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1287.8329040004246,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1333.236004000355,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1428.4230040002512,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1368.9475040000616,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1316.7802039997696,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6564.548618999652,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1784.587504999763,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1525.1530049999928,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1370.4215039997507,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1500.423905000389,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1537.66900500068,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1353.8477039992358,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1588.9887049997924,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5456.733615999838,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1507.0719049999752,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2027.5724060002176,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1841.213806000269,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1646.982504999869,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2019.025805999263,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1388.939104000201,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1427.1998039994287,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1712.0983049999268,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1503.2929050003077,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2287.869906999731,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1619.3631050000477,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1465.6858039998042,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5404.440815999806,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1449.7969039994132,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1494.3804049999017,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1580.5302050002865,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1647.627305000242,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1471.4494039999408,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6063.781918000132,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1656.035504999636,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1654.0618050003104,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1591.2555049999355,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1547.1695050000562,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5507.668016000025,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5692.672115999812,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1531.6479049997724,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1589.3743050000921,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2120.553306000147,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1665.9945050005263,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1701.2111049998566,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1720.6232050002654,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1830.3913059999104,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2071.044205999897,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1686.7651050006316,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1616.795805000038,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2165.863306000574,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2036.0129059999963,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2135.434806000376,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2012.4405060005301,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6409.453719000339,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2039.115405999837,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1665.4157050006688,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6468.684419000056,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2081.7704060000324,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1771.7504050006028,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5442.090816000018,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1953.6334060003355,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1948.405905999607,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1731.9155049999608,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1989.3847060002372,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1925.4011060002085,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1952.1799060003104,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1844.7459059998437,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2184.6725069999593,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2363.8618070008306,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2269.9469070003033,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1898.865006000051,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6504.697118999502,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5691.8501170002855,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2090.3003060002447,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2039.2700060001516,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1968.3892060002108,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2019.6524059992953,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2214.3040070004645,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2054.210006000176,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2184.0611070001614,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2129.520505999608,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1993.0398060005245,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 1999.61510599951,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2242.6902070001233,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2161.0849070002587,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3481.325310000102,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2122.635105999507,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2707.2514080000474,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2280.6391069998426,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2043.2373060002647,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2133.195205999982,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2089.636005999637,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2053.9737059998515,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2068.8055059999897,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2209.924506999414,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2286.874506999993,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5516.9689160002235,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2161.1512069994205,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2086.6726060003202,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5722.853116999431,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2623.3692079995308,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2108.3995059998415,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2154.6150069998475,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2435.3190069996344,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2133.306206999805,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2368.078207000508,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5567.286215999957,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2183.047806999639,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6479.304618999777,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2357.5407070002257,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2258.1258069994874,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2273.4504070003823,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5584.0117159996225,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2267.2553069996866,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2227.034907000416,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6445.681719000277,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2214.9934069993833,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2807.072607999544,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2369.2135069995857,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2602.4046080001426,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6484.202718999768,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2318.340206999892,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2322.185207000075,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2772.511707999911,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2246.164406999924,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2247.4402070001815,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2302.311606999865,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2633.926208000048,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2371.039207000649,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2858.740108999882,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5857.055817000401,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2279.8598069994114,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2496.874007999395,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2410.463406999952,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2526.7293079996307,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2351.2830059999033,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2624.7896069999115,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6478.092518000267,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2331.3775060005355,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2384.6129060002568,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2658.4900070001822,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3762.9784099999597,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2388.916906000304,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6210.962916999961,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2380.4348060002667,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2682.6820070000394,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2574.625406999985,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2806.1444069999197,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2653.6303069997302,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2840.901708000274,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3075.208807999843,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2738.816506999683,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2534.0708069998072,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2551.1416069994084,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2678.7599070003125,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2980.2860079998936,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3069.1698079999696,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5693.740816000172,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2786.7137069997625,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6372.786617999736,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2763.802807000502,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2660.2973069993823,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2723.80340699965,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2698.4783070001868,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2895.446708000236,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2682.1365069999956,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5996.525317000305,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2859.0937079998184,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2844.0854079999554,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2705.5937069999345,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2770.279006999772,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2757.440707000569,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5968.803616000514,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2730.9135069999684,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2927.753007999854,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2874.8401080001713,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3180.361108999932,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2827.922208000018,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2755.455507000079,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5994.906717000049,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3013.5573079996902,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2909.39970799991,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3043.2884080000804,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2849.9868079998123,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2806.057607999719,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2942.091408000124,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2980.289408000317,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3015.0852079996184,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2899.074107999695,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2848.403308000343,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2926.8930079997517,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2975.946907999969,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6003.226716999961,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2866.316507999727,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3579.124810000394,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5277.598915000453,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2852.2987080004896,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2856.083507999756,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3271.5889090004566,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3010.7170080000287,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3023.62360799998,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2875.537808000445,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2878.683307999381,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3093.5315079996144,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3060.086108000178,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2892.7941079991797,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2947.3294079998595,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3213.666609000029,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3090.4564080001364,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2965.256607999436,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3178.330009000092,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3136.6976090002936,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2934.973407999678,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3030.212908000067,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3124.2378079996342,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3165.912708999713,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5705.549016000077,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3153.7846090004678,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2972.078208000312,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6003.068816999985,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 2986.820307999551,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5738.205016000393,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3149.804509000205,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3046.049407999817,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5816.893416000312,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6385.047617999589,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3140.406809000524,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4055.2078110004004,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3072.745208000015,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6178.050516999974,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3112.982008000472,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3104.093907999413,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3055.419708000045,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6353.155218000211,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6399.927417999606,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4032.122610999977,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6421.993318000204,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3116.5473080000083,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3092.4127080006656,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3801.5196100004687,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5765.136615999836,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6119.567916999586,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3182.6715090001017,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4469.633111999428,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3122.8199089991904,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3165.0097090005147,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3956.84121100021,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3337.4201090000497,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3244.4225090002874,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3144.561008999517,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3156.0903090003194,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3990.3706109998893,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3784.329609999986,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3495.1170100002855,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3616.816810000273,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3215.5503090007187,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3377.246209000077,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4198.49281200004,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3594.0175100004126,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3511.993309999525,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3749.644409999746,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3308.0548090001685,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3357.3981090003144,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6245.767817000342,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3650.3812099999777,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3863.1219109993253,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3416.070008999668,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4079.1616110000177,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3894.7184110002127,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4123.9540110000235,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3488.591610000185,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5105.836614000509,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4229.804712000259,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3543.5485099997095,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4303.093712000191,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4249.357711999437,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3766.5668099998584,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6252.450216999932,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3702.408009999999,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4970.907914000236,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5893.281615999513,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3903.8969109997197,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4398.939411999891,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4247.703111999726,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5425.525215000562,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3853.539911000553,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4704.960813000071,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4486.999712000397,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4436.9919119999395,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 3951.795711000159,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6156.023916999402,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4134.621711000364,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6351.6950180001,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4165.79651200027,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4050.1495110001997,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4813.914712999576,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4327.12341199931,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5095.742714000153,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4136.861411000609,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5066.591814000276,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4921.3816139999835,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4348.589711999921,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5147.012213999915,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4483.93691199999,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5969.669816999158,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4888.98371400046,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4274.504512000021,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6019.390716999624,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4714.874412999961,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4775.611813000069,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4615.478712999902,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 6326.927017999878,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4522.5772129997495,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4889.778613999624,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5000.859314000081,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4849.919713999952,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4558.549313000185,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5261.733715000446,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4502.650312999322,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 4640.684512999542,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5077.661213999818,
+        "error": null
+      },
+      {
+        "status_code": 200,
+        "elapsed_ms": 5441.735614999743,
+        "error": null
+      }
+    ]
+  },
+  "server_performance_snapshot": {
+    "available": true,
+    "data": {
+      "request_count": 387,
+      "total_requests_recorded": 387,
+      "max_request_history": 1000,
+      "counters": [],
+      "gauges": [
+        {
+          "name": "process_memory_peak_rss_bytes",
+          "tags": {},
+          "value": 111038464.0
+        },
+        {
+          "name": "process_memory_current_rss_bytes",
+          "tags": {},
+          "value": 111587328.0
+        },
+        {
+          "name": "gc_object_count",
+          "tags": {
+            "generation": "0"
+          },
+          "value": 613.0
+        },
+        {
+          "name": "gc_object_count",
+          "tags": {
+            "generation": "1"
+          },
+          "value": 0.0
+        },
+        {
+          "name": "gc_object_count",
+          "tags": {
+            "generation": "2"
+          },
+          "value": 0.0
+        },
+        {
+          "name": "gc_collections_total",
+          "tags": {
+            "generation": "0"
+          },
+          "value": 0.0
+        },
+        {
+          "name": "gc_collected_total",
+          "tags": {
+            "generation": "0"
+          },
+          "value": 0.0
+        },
+        {
+          "name": "gc_uncollectable_total",
+          "tags": {
+            "generation": "0"
+          },
+          "value": 0.0
+        },
+        {
+          "name": "gc_collections_total",
+          "tags": {
+            "generation": "1"
+          },
+          "value": 13.0
+        },
+        {
+          "name": "gc_collected_total",
+          "tags": {
+            "generation": "1"
+          },
+          "value": 26259.0
+        },
+        {
+          "name": "gc_uncollectable_total",
+          "tags": {
+            "generation": "1"
+          },
+          "value": 0.0
+        },
+        {
+          "name": "gc_collections_total",
+          "tags": {
+            "generation": "2"
+          },
+          "value": 0.0
+        },
+        {
+          "name": "gc_collected_total",
+          "tags": {
+            "generation": "2"
+          },
+          "value": 0.0
+        },
+        {
+          "name": "gc_uncollectable_total",
+          "tags": {
+            "generation": "2"
+          },
+          "value": 0.0
+        },
+        {
+          "name": "thread_count_total",
+          "tags": {},
+          "value": 13.0
+        },
+        {
+          "name": "thread_count_daemon",
+          "tags": {},
+          "value": 4.0
+        },
+        {
+          "name": "thread_count_non_daemon",
+          "tags": {},
+          "value": 9.0
+        },
+        {
+          "name": "process_cpu_user_seconds_total",
+          "tags": {},
+          "value": 5.77
+        },
+        {
+          "name": "process_cpu_system_seconds_total",
+          "tags": {},
+          "value": 1.38
+        },
+        {
+          "name": "cpu_logical_count",
+          "tags": {},
+          "value": 8.0
+        },
+        {
+          "name": "asyncio_task_count_total",
+          "tags": {},
+          "value": 20.0
+        },
+        {
+          "name": "asyncio_task_count_pending",
+          "tags": {},
+          "value": 20.0
+        },
+        {
+          "name": "process_id",
+          "tags": {},
+          "value": 31351.0
+        },
+        {
+          "name": "process_open_fds",
+          "tags": {},
+          "value": 53.0
+        },
+        {
+          "name": "process_max_fds",
+          "tags": {},
+          "value": 10240.0
+        },
+        {
+          "name": "pool_active_connections",
+          "tags": {},
+          "value": 0.0
+        },
+        {
+          "name": "pool_idle_connections",
+          "tags": {},
+          "value": 16.0
+        }
+      ],
+      "histograms": [
+        {
+          "name": "dispatch",
+          "tags": {},
+          "count": 387,
+          "sum": 7582820524.0,
+          "mean": 19593851.483204134,
+          "min": 438500.0,
+          "max": 194185099.0,
+          "p50": 17953165.016279172,
+          "p90": 48858073.29971676,
+          "p95": 55035987.20467964,
+          "p99": 71846520.04337516
+        },
+        {
+          "name": "pool_acquire",
+          "tags": {},
+          "count": 6,
+          "sum": 506800.0,
+          "mean": 84466.66666666667,
+          "min": 48900.0,
+          "max": 132300.0,
+          "p50": 78800.0,
+          "p90": 78800.0,
+          "p95": 78800.0,
+          "p99": 78800.0
+        },
+        {
+          "name": "sql_execute",
+          "tags": {},
+          "count": 4,
+          "sum": 8429200.0,
+          "mean": 2107300.0,
+          "min": 1820900.0,
+          "max": 2910900.0,
+          "p50": 1835900.0,
+          "p90": 1861500.0,
+          "p95": 1861500.0,
+          "p99": 1861500.0
+        },
+        {
+          "name": "pool_release",
+          "tags": {},
+          "count": 6,
+          "sum": 140200.0,
+          "mean": 23366.666666666668,
+          "min": 20800.0,
+          "max": 26400.0,
+          "p50": 22600.0,
+          "p90": 22600.0,
+          "p95": 22600.0,
+          "p99": 22600.0
+        },
+        {
+          "name": "sql_fetch_one",
+          "tags": {},
+          "count": 3,
+          "sum": 9756000.0,
+          "mean": 3252000.0,
+          "min": 2511100.0,
+          "max": 4065500.0,
+          "p50": 3179400.0,
+          "p90": 3179400.0,
+          "p95": 3179400.0,
+          "p99": 3179400.0
+        }
+      ],
+      "recent_requests": [
+        {
+          "request_id": "febd090423c14c448c474a0acd767f02",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 18951500,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "7ec826514fb749108f32f607a1ae7cca",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 19788800,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "36a3301c920e437cbce1b64e1b6dece8",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 19997500,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "2d88b180ecf346f08155e80bee0fd305",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 21358000,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "0397b4532b6b499b8322c330d456ba95",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 16974800,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "62c9c6cddca640ae8a420fb82deaef28",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 19489800,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "59efdc784d744172956784d2fe5a0901",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 6991100,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "d0ba1f5d2e4c449bb4682f8c3b40f236",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 5085700,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "a2b9d85658c3497286ad8fcc37134730",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 10556400,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "229a03ec35ad4989b95744fdfdaca034",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 27519200,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "1da10cf100e54a77adf3f9029f9e281e",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 50086600,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "8ae6aad394f54775ba5444853da71dd8",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 52653201,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "78265d010f584f66890677940df93ef9",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 57866801,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "53a22ffc65d24e91a28d96ab7f741761",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 52114001,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "0b4cc24f9dd2415198a76e307ae79db3",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 72913101,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "041c317cf20546f38b2dfab7c305f111",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 51278900,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "9bc4c2cf2a474773a770c84c37b0fdbf",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 27884500,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "c8db6ecd0d7a4cd4b6f748d8605a7795",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 23884800,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "b44bd2ff82614b8989f498670e46d142",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 24869900,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        },
+        {
+          "request_id": "41b8c3365be24db1999aa82ada91eb1a",
+          "status": "ok",
+          "error": null,
+          "duration_ns": 51970700,
+          "tags": {
+            "method": "POST",
+            "route": "/api/query",
+            "status_code": "200"
+          }
+        }
+      ]
+    }
+  }
+}

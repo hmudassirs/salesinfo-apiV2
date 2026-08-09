@@ -100,6 +100,12 @@ class HealthResponse(BaseModel):
             "roadmap P1-4 (only present when PERF_ADAPTIVE_SAMPLING=true)"
         ),
     )
+    auth_metrics: Optional[dict] = Field(
+        None,
+        description=(
+            "Authentication cache diagnostics: API key cache and user cache"
+        ),
+    )
     alerts: List[dict] = Field(
         default_factory=list,
         description=(

@@ -407,7 +407,7 @@ async def login_user(
         if not user or not password_ok:
             service_manager.audit.log_audit_event(
                 event_type="user.login",
-                user_id=user.get("user_id") if user else "unknown",
+                user_id=user.get("user_id") if user else None,
                 resource_type="user",
                 resource_id=user.get("user_id") if user else "unknown",
                 action="login",

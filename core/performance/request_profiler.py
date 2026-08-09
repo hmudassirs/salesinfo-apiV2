@@ -43,6 +43,7 @@ from .types import (
     Tags,
     TimestampNS,
 )
+from .metric import MetricType, MetricPoint, MetricUnit
 
 STATUS_OK = "ok"
 STATUS_ERROR = "error"
@@ -287,6 +288,17 @@ class RequestProfiler:
         if self._completed:
             raise ProfilerStateError(_PROFILER_ALREADY_COMPLETED_MESSAGE)
         self.trace.finish_all()
+        if self.trace.root is not None:
+            self.metric_points.append(
+                MetricPoint(
+                    name=self.trace.root.name,
+                    metric_type=MetricType.TIMER,
+                    value=self.trace.root.duration_ns,
+                    timestamp_ns=PerformanceClock.now_ns(),
+                    unit=MetricUnit.NANOSECONDS,
+                    tags=dict(self.tags),
+                )
+            )
         finished_ns = PerformanceClock.now_ns()
         self._completed = True
         return RequestProfile(
