@@ -19,7 +19,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from dataclasses import dataclass, field
 
-from .constants import DEFAULT_HISTOGRAM_BUCKET_BOUNDS_MS
+from .constants import DEFAULT_HISTOGRAM_BUCKET_BOUNDS_MS, NANOSECONDS_PER_MILLISECOND
 from .exceptions import (
     _HISTOGRAM_INVALID_QUANTILE_MESSAGE,
     _HISTOGRAM_NO_SAMPLES_MESSAGE,
@@ -49,13 +49,35 @@ class Histogram:
         self._bucket_counts = [0] * (len(self.bucket_bounds) + 1)
 
     def observe(self, value: MetricValue) -> None:
-        """Record one observation into the running count, sum, and buckets."""
+        """Record one observation into the running count, sum, and buckets.
+
+        `value` is a raw nanosecond duration everywhere this is called
+        from in practice (`MetricPoint.value` is always `duration_ns` --
+        see `request_profiler.py`), but `bucket_bounds` is documented
+        and defaulted (`DEFAULT_HISTOGRAM_BUCKET_BOUNDS_MS`) in whole
+        milliseconds. Bucket assignment converts to match; `count`,
+        `total`, `minimum`, `maximum` stay in the original nanosecond
+        units to match `StreamingPercentileEstimator`'s quantiles and
+        every existing consumer of `snapshot()`'s `sum`/`mean`/`min`/
+        `max` fields, which already assume nanoseconds (e.g. the
+        dashboard divides them by 1e6 for display). Getting this
+        conversion wrong here (as an earlier version of this method
+        did, comparing the raw nanosecond value directly against
+        millisecond bounds) doesn't throw or otherwise announce
+        itself -- every observation just silently lands in the final
+        (+Inf) bucket, since even a 1ms duration is already
+        1,000,000ns, dwarfing every finite bound. `cumulative_counts()`
+        still "works" in that state (all cumulative counts equal
+        `count`), which is why it went unnoticed: nothing exercised the
+        *distribution* across buckets until `percentile_from_buckets()`
+        needed one that wasn't degenerate.
+        """
         value = float(value)
         self.count += 1
         self.total += value
         self.minimum = value if self.minimum is None else min(self.minimum, value)
         self.maximum = value if self.maximum is None else max(self.maximum, value)
-        index = bisect_left(self.bucket_bounds, value)
+        index = bisect_left(self.bucket_bounds, value / NANOSECONDS_PER_MILLISECOND)
         self._bucket_counts[index] += 1
 
     @property
@@ -74,6 +96,21 @@ class Histogram:
             running += bucket_count
             result[label] = running
         return result
+
+    @property
+    def bucket_counts(self) -> list[int]:
+        """Return non-cumulative per-bucket counts, one per bound plus +Inf.
+
+        Unlike `cumulative_counts()` (a display-friendly, labeled,
+        running total), this is the raw per-bucket tally -- exactly
+        what's needed to *merge* histograms from multiple processes:
+        summing two processes' `bucket_counts` element-wise (same
+        `bucket_bounds`, so same shape) gives the bucket counts of the
+        combined population, from which `count`/`total`/`min`/`max` and
+        an interpolated quantile can all be recomputed. See
+        `core.performance.dashboard.merge`.
+        """
+        return list(self._bucket_counts)
 
 
 # The five markers P^2 tracks: the two extremes, the target quantile, and
@@ -183,6 +220,45 @@ def _linear(heights: list[float], positions: list[int], i: int, d: int) -> float
     return heights[i] + d * (heights[neighbor] - heights[i]) / (
         positions[neighbor] - positions[i]
     )
+
+
+def percentile_from_buckets(
+    bucket_bounds: tuple[float, ...],
+    bucket_counts: list[int],
+    quantile: float,
+) -> float | None:
+    """Estimate a quantile from (already-summed) per-bucket counts.
+
+    Used to recompute p50/p90/p95/p99 for a histogram *merged* across
+    processes (see `core.performance.dashboard.merge`): each process's
+    P^2 streaming estimator (`StreamingPercentileEstimator` above) has
+    internal marker state that cannot be validly averaged or summed
+    across processes, but the underlying bucketed `Histogram` can --
+    bucket counts are exact integers, and summing them element-wise
+    gives the exact bucket counts of the combined population. This
+    walks the merged buckets to find the one the target rank falls
+    into and linearly interpolates within it, the same technique
+    Prometheus's `histogram_quantile()` uses. It trades some precision
+    (bounded by bucket width) for being mathematically valid to merge,
+    unlike the streaming estimator.
+    """
+    total = sum(bucket_counts)
+    if total == 0:
+        return None
+    target_rank = quantile * total
+    running = 0
+    lower_bound = 0.0
+    for bound, count in zip(bucket_bounds, bucket_counts[:-1], strict=True):
+        if running + count >= target_rank:
+            if count == 0:
+                return bound
+            fraction = (target_rank - running) / count
+            return lower_bound + fraction * (bound - lower_bound)
+        running += count
+        lower_bound = bound
+    # Fell into the implicit +Inf bucket: no upper bound to interpolate
+    # against, so the best available estimate is the last finite bound.
+    return bucket_bounds[-1] if bucket_bounds else lower_bound
 
 
 @dataclass(slots=True)

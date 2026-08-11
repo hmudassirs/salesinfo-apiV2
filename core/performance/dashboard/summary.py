@@ -51,6 +51,15 @@ def _histogram_dict(histogram: StreamingHistogram) -> dict[str, object]:
         "name": histogram.name,
         "tags": dict(histogram.tags),
         **histogram.snapshot(),
+        # Raw, exactly-mergeable bucket data -- see
+        # core.performance.dashboard.merge and
+        # core.performance.histogram.percentile_from_buckets. Not shown
+        # by the live dashboard itself; carried through the JSON
+        # response purely so a cross-process merge can recompute
+        # quantiles from combined buckets rather than trying to average
+        # each worker's independent P^2 estimator state (invalid).
+        "bucket_bounds": list(histogram.bucket_bounds),
+        "bucket_counts": histogram.histogram.bucket_counts,
     }
 
 

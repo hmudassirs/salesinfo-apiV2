@@ -343,13 +343,28 @@ class PerformanceStep(LifecycleStep):
     performance module itself is enabled); set it to `0`/`false` to keep
     the registry populated (e.g. for the live dashboard) without also
     pushing it to OTel.
+
+    Cross-process snapshot publishing: with `--workers N > 1`, each
+    worker is a separate process with its own registry — see
+    `core.performance.cross_process`'s module docstring for why that
+    used to make `/debug/performance` only ever show one worker's
+    slice of traffic. This step also starts a loop that periodically
+    publishes this worker's own summary to Postgres (shared by every
+    worker via `container`'s `service_db`, registered later by
+    `ServiceDatabaseStep` — this step runs first, so the loop starts
+    before `service_db` exists and simply skips publishing until it
+    does) so `/debug/performance` can merge every worker's most recent
+    snapshot together. Interval: `PERF_CROSS_PROCESS_PUBLISH_INTERVAL_SECONDS`
+    (default 2s, matching the dashboard's own refresh interval).
     """
 
     name = "performance"
 
-    def __init__(self) -> None:
+    def __init__(self, container: Optional[Any] = None) -> None:
         self.scheduler: Optional[Any] = None
         self._otel_export_task: Optional["asyncio.Task[None]"] = None
+        self._snapshot_publish_task: Optional["asyncio.Task[None]"] = None
+        self._container = container
 
     def startup_sync(self) -> Dict[str, Any]:
         if PerformanceConfig is None or get_default_registry is None:
@@ -406,6 +421,29 @@ class PerformanceStep(LifecycleStep):
                 interval_seconds,
             )
 
+        # Cross-process snapshot publishing (see the class docstring):
+        # gated the same way as the collectors/OTel export above --
+        # only when the performance module itself is enabled, and only
+        # when this step was actually given a container to read
+        # service_db from later (ApplicationLifespan always passes
+        # one; a standalone PerformanceStep() as tests/benchmarks might
+        # construct just skips this, same as they already skip the
+        # OTel export loop if OTelExporter isn't importable).
+        if config.enabled and self._container is not None:
+            publish_interval_seconds = float(
+                os.getenv("PERF_CROSS_PROCESS_PUBLISH_INTERVAL_SECONDS", "2")
+            )
+            self._snapshot_publish_task = asyncio.ensure_future(
+                self._run_snapshot_publish(
+                    registry, self._container, publish_interval_seconds
+                )
+            )
+            logger.info(
+                "Cross-process performance snapshot publishing started "
+                "(interval=%.1fs)",
+                publish_interval_seconds,
+            )
+
         return {"performance_registry": registry}
 
     @staticmethod
@@ -425,6 +463,45 @@ class PerformanceStep(LifecycleStep):
                 )
             await asyncio.sleep(interval_seconds)
 
+    @staticmethod
+    async def _run_snapshot_publish(
+        registry: Any, container: Any, interval_seconds: float
+    ) -> None:
+        """Periodically publish this worker's summary for other workers to read.
+
+        Runs for the lifetime of the app; cancellation (on shutdown) is
+        the normal, expected way this loop ends. `service_db` isn't
+        registered in `container` yet on this loop's first iterations
+        (`PerformanceStep` runs before `ServiceDatabaseStep` -- see
+        `ApplicationLifespan.__init__`'s step-ordering comment), so
+        each iteration re-reads it from `container` rather than
+        capturing it once; the loop is a no-op until it appears, then
+        publishes every interval for as long as the app runs.
+        """
+        # Imported lazily, matching the rest of this module's pattern
+        # for optional/late-available subsystems (see the OTelExporter
+        # import guard above): core.performance itself might be absent
+        # in a stripped-down environment even when this loop is asked
+        # to run, and there's no point failing startup over it.
+        from core.performance.cross_process import WorkerSnapshotStore
+        from core.performance.dashboard.summary import build_performance_summary
+
+        store: Optional[WorkerSnapshotStore] = None
+        while True:
+            service_db = container.get_service_db()
+            if service_db is not None:
+                if store is None:
+                    store = WorkerSnapshotStore(service_db)
+                try:
+                    summary = build_performance_summary(registry)
+                    await asyncio.to_thread(store.publish, summary)
+                except Exception:
+                    logger.warning(
+                        "Cross-process performance snapshot publish failed",
+                        exc_info=True,
+                    )
+            await asyncio.sleep(interval_seconds)
+
     def shutdown_sync(self) -> None:
         pass  # the scheduler/export loop are only ever started in async mode
 
@@ -436,6 +513,11 @@ class PerformanceStep(LifecycleStep):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._otel_export_task
             self._otel_export_task = None
+        if self._snapshot_publish_task is not None:
+            self._snapshot_publish_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._snapshot_publish_task
+            self._snapshot_publish_task = None
 
 
 # ============================================================
@@ -591,7 +673,7 @@ class ApplicationLifespan:
         # starts last so it drains *first*, while ServiceDatabase and
         # the executors it depends on are still up.
         self._steps: List[LifecycleStep] = [
-            PerformanceStep(),
+            PerformanceStep(self.container),
             DataWarehouseStep(db_config),
             ExecutorsStep(),
             ServiceDatabaseStep(

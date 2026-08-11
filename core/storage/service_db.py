@@ -518,13 +518,18 @@ class ServiceDatabase:
             )
             return
 
-        existing = self.fetch_one(
-            "SELECT COUNT(*) as count FROM users WHERE username = ?", (username,)
-        )
-        if existing and existing["count"] > 0:
-            logger.info(f"User '{username}' already exists; skipping admin bootstrap.")
-            return
-
+        # INSERT ... ON CONFLICT DO NOTHING rather than a separate
+        # "does this username already exist" SELECT beforehand: that
+        # older check-then-insert shape is a race across concurrent
+        # `--workers N > 1` processes all calling this method at
+        # startup (see apply_migrations_sync's docstring for the same
+        # class of bug in migrations) -- two workers can both see zero
+        # matching rows and both attempt the INSERT, and the loser
+        # crashes on `users_pkey`/`users_username_key`'s unique
+        # constraint instead of quietly finding the user already
+        # bootstrapped by whichever worker won the race. Postgres's own
+        # conflict handling makes this atomic without needing a
+        # separate advisory lock the way the migration race did.
         email = os.getenv("INITIAL_ADMIN_EMAIL", f"{username}@preparedata.local")
         user_id = f"user_admin_{int(time.time())}"
         password_hash = hash_password(password)
@@ -533,13 +538,17 @@ class ServiceDatabase:
         sql = """
         INSERT INTO users (user_id, username, email, password_hash, roles, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (username) DO NOTHING
         """
-        self.execute(
+        result = self.execute(
             sql,
             (user_id, username, email, password_hash, "admin", created_at, created_at),
         )
 
-        logger.info(f"Created initial admin user '{username}' (user_id={user_id})")
+        if result.rowcount == 0:
+            logger.info(f"User '{username}' already exists; skipping admin bootstrap.")
+        else:
+            logger.info(f"Created initial admin user '{username}' (user_id={user_id})")
 
     def cleanup_expired_cache(self) -> int:
         """Clean up expired cache entries.

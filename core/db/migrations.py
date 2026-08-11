@@ -68,6 +68,22 @@ _INSERT_APPLIED_SQL = (
     "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)"
 )
 
+# Fixed Postgres advisory-lock key serializing concurrent migration
+# application (see apply_migrations_sync's docstring for why this is
+# needed at all: `--workers N > 1` starting simultaneously otherwise
+# race on `CREATE TABLE IF NOT EXISTS`). An arbitrary constant is
+# sufficient -- `pg_advisory_lock`'s bigint keyspace is a flat
+# namespace shared by every advisory lock on the connection's current
+# database, so this only needs to not collide with some *other* use of
+# advisory locks against the same database, which this codebase has
+# none of today. Picked by taking a fixed string through Python's hash
+# truncated to signed-32-bit range (pg_advisory_lock accepts a single
+# bigint or an int, int pair; kept to one 32-bit-safe int for the
+# widest driver compatibility) rather than an arbitrary decimal, so
+# the origin of the number is obvious from reading this comment rather
+# than needing one.
+_MIGRATION_LOCK_KEY = 0x6D696772 & 0x7FFFFFFF  # "migr" as bytes, masked positive
+
 # `applied_at` is a Unix timestamp (float, time.time()); DOUBLE
 # PRECISION is Postgres's 64-bit float type.
 POSTGRES_TRACKING_TABLE_DDL = """
@@ -162,38 +178,72 @@ def apply_migrations_sync(db, directory: Path) -> List[str]:
     failure is every statement in it being idempotent; see the same
     docstring section.
 
+    The whole call runs under one Postgres session-level advisory lock
+    (`_MIGRATION_LOCK_KEY`) held on a single dedicated connection for
+    the call's full duration. Without it, `--workers N > 1` starting
+    simultaneously (every worker is a separate process, each running
+    its own copy of this function against the same database) race on
+    `CREATE TABLE IF NOT EXISTS`: the existence check and the create
+    aren't atomic across sessions, so two workers can both see "table
+    absent" and both attempt the create, and the loser fails with
+    Postgres's `duplicate key value violates unique constraint
+    "pg_type_typname_nsp_index"` -- a well-known concurrent-DDL
+    footgun, not a corrupted migration file. The lock serializes
+    workers here instead: the first to arrive applies whatever's
+    pending, the rest block briefly then find nothing left to do.
+    Session-level (not `pg_advisory_xact_lock`) because `execute_on`
+    below already commits per-statement (see the module docstring) --
+    a transaction-scoped lock would release after the very first
+    statement instead of holding for the whole call. Released
+    explicitly in `finally` (not by connection close) so the pooled
+    connection returns to the pool immediately, unlocked, even if a
+    migration fails partway through.
+
     Returns:
         Names of migrations actually applied this call (empty if the
         schema was already current).
     """
-    db.execute(POSTGRES_TRACKING_TABLE_DDL)
-    applied_versions = {
-        row["version"] for row in db.fetch_all("SELECT version FROM schema_migrations")
-    }
-
     newly_applied: List[str] = []
-    for migration in load_migrations(directory):
-        if migration.version in applied_versions:
-            continue
-
-        label = f"{migration.version:04d}_{migration.name}"
-        logger.info(f"Applying migration {label}")
+    with db.transaction() as adapter:
+        db.execute_on(adapter, "SELECT pg_advisory_lock(?)", (_MIGRATION_LOCK_KEY,))
         try:
-            with db.transaction() as adapter:
-                for statement in _split_statements(migration.sql):
-                    db.execute_on(adapter, statement)
-                db.execute_on(
-                    adapter,
-                    _INSERT_APPLIED_SQL,
-                    (migration.version, migration.name, time.time()),
-                )
-        except Exception:
-            logger.error(
-                f"Migration {label} failed; no partial changes from "
-                "this file were recorded as applied"
+            db.execute_on(adapter, POSTGRES_TRACKING_TABLE_DDL)
+            # No fetch_all_on() sibling to fetch_one_on() exists on
+            # ServiceDatabase, so this goes straight to the adapter's
+            # own .execute(...).fetchall() -- the same primitive
+            # fetch_one_on() itself is built on (see that method above).
+            applied_versions = {
+                row["version"]
+                for row in adapter.execute(
+                    "SELECT version FROM schema_migrations"
+                ).fetchall()
+            }
+
+            for migration in load_migrations(directory):
+                if migration.version in applied_versions:
+                    continue
+
+                label = f"{migration.version:04d}_{migration.name}"
+                logger.info(f"Applying migration {label}")
+                try:
+                    for statement in _split_statements(migration.sql):
+                        db.execute_on(adapter, statement)
+                    db.execute_on(
+                        adapter,
+                        _INSERT_APPLIED_SQL,
+                        (migration.version, migration.name, time.time()),
+                    )
+                except Exception:
+                    logger.error(
+                        f"Migration {label} failed; no partial changes from "
+                        "this file were recorded as applied"
+                    )
+                    raise
+                newly_applied.append(label)
+        finally:
+            db.execute_on(
+                adapter, "SELECT pg_advisory_unlock(?)", (_MIGRATION_LOCK_KEY,)
             )
-            raise
-        newly_applied.append(label)
 
     if newly_applied:
         logger.info(f"Applied {len(newly_applied)} migration(s): {', '.join(newly_applied)}")
@@ -206,51 +256,51 @@ async def apply_migrations_async(session_factory: Callable, directory: Path) -> 
     `db_session.get_async_session`), which is expected to expose
     `execute(sql, params)` / `fetch_all(sql, params)`.
 
-    Each migration file runs against its own acquired session so a
-    failure partway through one file doesn't hold a connection open
-    across the rest of this function's work -- but note this relies on
-    Postgres's implicit per-statement transaction behavior for the
-    "whole file is all-or-nothing" guarantee, since (unlike
-    `apply_migrations_sync`) there's no explicit BEGIN/COMMIT here;
-    psycopg2 already wraps each `cursor.execute()` in
-    `PostgreSQLAdapter.execute()`'s own commit/rollback (see that
-    adapter), so a failure partway through a file's statements leaves
-    only the already-committed-and-executed statements applied, not a
-    fully clean rollback of the whole file. Acceptable for this
-    module's actual migrations (independent `CREATE TABLE IF NOT
-    EXISTS` statements, safe to re-run), but worth knowing if a future
-    migration here needs true multi-statement atomicity.
+    The whole call runs under one dedicated session for its full
+    duration (unlike a prior version of this function, which opened a
+    fresh session per migration file) so the session-level advisory
+    lock acquired at the top stays held on the same physical connection
+    throughout -- see `apply_migrations_sync`'s docstring for why the
+    lock exists and why it must be session- rather than
+    transaction-scoped here.
 
     Returns:
         Names of migrations actually applied this call.
     """
-    async with session_factory() as session:
-        await session.execute(POSTGRES_TRACKING_TABLE_DDL)
-        applied_rows = await session.fetch_all("SELECT version FROM schema_migrations")
-    applied_versions = {row["version"] for row in applied_rows}
-
     newly_applied: List[str] = []
-    for migration in load_migrations(directory):
-        if migration.version in applied_versions:
-            continue
-
-        label = f"{migration.version:04d}_{migration.name}"
-        logger.info(f"Applying migration {label}")
+    async with session_factory() as session:
+        await session.execute("SELECT pg_advisory_lock(?)", (_MIGRATION_LOCK_KEY,))
         try:
-            async with session_factory() as session:
-                for statement in _split_statements(migration.sql):
-                    await session.execute(statement)
-                await session.execute(
-                    _INSERT_APPLIED_SQL,
-                    (migration.version, migration.name, time.time()),
-                )
-        except Exception:
-            logger.error(
-                f"Migration {label} failed; no partial changes from "
-                "this file were recorded as applied"
+            await session.execute(POSTGRES_TRACKING_TABLE_DDL)
+            applied_rows = await session.fetch_all(
+                "SELECT version FROM schema_migrations"
             )
-            raise
-        newly_applied.append(label)
+            applied_versions = {row["version"] for row in applied_rows}
+
+            for migration in load_migrations(directory):
+                if migration.version in applied_versions:
+                    continue
+
+                label = f"{migration.version:04d}_{migration.name}"
+                logger.info(f"Applying migration {label}")
+                try:
+                    for statement in _split_statements(migration.sql):
+                        await session.execute(statement)
+                    await session.execute(
+                        _INSERT_APPLIED_SQL,
+                        (migration.version, migration.name, time.time()),
+                    )
+                except Exception:
+                    logger.error(
+                        f"Migration {label} failed; no partial changes from "
+                        "this file were recorded as applied"
+                    )
+                    raise
+                newly_applied.append(label)
+        finally:
+            await session.execute(
+                "SELECT pg_advisory_unlock(?)", (_MIGRATION_LOCK_KEY,)
+            )
 
     if newly_applied:
         logger.info(f"Applied {len(newly_applied)} migration(s): {', '.join(newly_applied)}")
