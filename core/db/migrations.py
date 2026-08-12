@@ -10,17 +10,17 @@ files, tracked in a `schema_migrations` table, applied in order, each
 file as one all-or-nothing unit. Same idea as golang-migrate/dbmate/
 Flyway, scaled down to fit a raw-SQL codebase.
 
-Two call sites use this, both against `migrations/warehouse_postgres/`
+Two call sites use this, both against `migrations/postgresql/`
 and the same `schema_migrations` table -- there is one PostgreSQL
-database for the whole application (see `core.storage.service_db`'s
+database for the whole application (see `core.storage.application_state_store`'s
 module docstring), so both are tracking migrations against that same
 database:
 
-- `core.storage.service_db.ServiceDatabase.create_tables()` --
-  synchronous (`apply_migrations_sync`), since ServiceDatabase is a
+- `core.storage.application_state_store.ApplicationStateStore.create_tables()` --
+  synchronous (`apply_migrations_sync`), since ApplicationStateStore is a
   sync-only class.
 - `core.auth.shared_state` -- applied asynchronously
-  (`apply_migrations_async`) from `DataWarehouseStep.startup_async()`
+  (`apply_migrations_async`) from `ApplicationDataStep.startup_async()`
   (`core.app.lifespan`).
 
 Whichever of the two runs first at startup creates the schema; the
@@ -164,7 +164,7 @@ def _split_statements(sql: str) -> List[str]:
 
 def apply_migrations_sync(db, directory: Path) -> List[str]:
     """Apply any not-yet-applied migrations in `directory` against any
-    `db` shaped like `core.storage.service_db.ServiceDatabase`:
+    `db` shaped like `core.storage.application_state_store.ApplicationStateStore`:
     `.execute(sql, params)`, `.fetch_all(sql, params)`, `.transaction()`
     as a context manager yielding an adapter, `.execute_on(adapter,
     sql, params)`.
@@ -209,7 +209,7 @@ def apply_migrations_sync(db, directory: Path) -> List[str]:
         try:
             db.execute_on(adapter, POSTGRES_TRACKING_TABLE_DDL)
             # No fetch_all_on() sibling to fetch_one_on() exists on
-            # ServiceDatabase, so this goes straight to the adapter's
+            # ApplicationStateStore, so this goes straight to the adapter's
             # own .execute(...).fetchall() -- the same primitive
             # fetch_one_on() itself is built on (see that method above).
             applied_versions = {

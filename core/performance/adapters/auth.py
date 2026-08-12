@@ -9,7 +9,7 @@ cost) happens in `core.auth`:
 
 - `InstrumentedAPIKeyService` wraps `core.auth.api_key_service.APIKeyService`.
   `validate_api_key` in particular runs on every authenticated request
-  (see that class's own docstring), offloading a service-database
+  (see that class's own docstring), offloading an application-state-store
   round-trip via
   `asyncio.to_thread` on a cache miss — exactly the kind of per-request
   cost this subsystem exists to make visible.

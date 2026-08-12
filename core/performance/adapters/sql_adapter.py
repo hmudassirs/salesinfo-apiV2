@@ -7,11 +7,11 @@ looks it up via `core.db.registry.get_adapter_registry()` based on
 configured `db_type` -- so `InstrumentedSQLAdapter` wraps the
 `execute`/`fetch_one`/`fetch_all`/`connect`/`disconnect`/`.connection`
 shape generically too, rather than naming `PostgreSQLAdapter` directly.
-Distinct from `adapters.service_db.InstrumentedServiceDatabase` (a
+Distinct from `adapters.application_state.InstrumentedApplicationStateStore` (a
 different, unrelated concrete class: the auth/API-key/audit service
 database, not the per-request query database, even though both now
 live in the same PostgreSQL database -- see
-core.storage.service_db's module docstring). This is deliberately the
+core.storage.application_state_store's module docstring). This is deliberately the
 minimal surface `AsyncSessionWrapper`/`SyncSessionWrapper` in
 `core.db.session` actually call.
 """

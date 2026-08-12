@@ -106,14 +106,14 @@ def install_performance_dashboard(
             resolved_registry, recent_limit=recent_limit
         )
         container = getattr(request.app.state, "container", None)
-        service_db = container.get_service_db() if container is not None else None
-        if service_db is None:
+        application_state = container.get_application_state() if container is not None else None
+        if application_state is None:
             return local_summary
 
         from core.performance.cross_process import WorkerSnapshotStore
 
         try:
-            store = WorkerSnapshotStore(service_db)
+            store = WorkerSnapshotStore(application_state)
             snapshots = store.collect_fresh(cross_process_max_age_seconds)
         except Exception:
             logger.warning(

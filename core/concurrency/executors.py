@@ -3,12 +3,12 @@
 Why this exists (roadmap rule #5: "Do not use one oversized global
 thread pool for unrelated workloads."):
 
-Before this module, every blocking call in the process -- warehouse
-queries, service-db reads/writes (auth lookups, query cache
+Before this module, every blocking call in the process -- application
+data queries, state-store reads/writes (auth lookups, query cache
 reads/writes, logging), and fire-and-forget background writes -- all
 went through `asyncio.to_thread`, which dispatches into the event
-loop's single *default* executor. That means a burst of slow warehouse
-queries can starve API-key validation, or a wave of cache-hit access-
+loop's single *default* executor. That means a burst of slow application
+data queries can starve API-key validation, or a wave of cache-hit access-
 stat writes can delay someone else's actual query execution, purely
 because they're all fighting over the same finite thread pool with no
 relationship to each other's workload.
@@ -16,11 +16,11 @@ relationship to each other's workload.
 This module instead gives each workload its own bounded
 `ThreadPoolExecutor`:
 
-    - `db_executor`: warehouse reads/writes (the main query path)
-    - `service_executor`: the service database (auth, API keys, query
+    - `application_data_executor`: application data reads/writes (the main query path)
+    - `application_state_executor`: the application state store (auth, API keys, query
       result cache reads/writes) -- a separate PostgreSQL connection
-      pool from the warehouse's, even though both point at the same
-      database (see core.storage.service_db's module docstring)
+      pool from the application data's, even though both point at the same
+      database (see core.storage.application_state_store's module docstring)
     - `background_executor`: fire-and-forget work that must never
       compete with request-serving threads for a slot -- cache
       persistence after a miss, access-stat bookkeeping on a cache hit,
@@ -58,7 +58,7 @@ class _TrackedExecutor:
     """Thin wrapper around ThreadPoolExecutor that tracks how many
     submitted jobs are currently in flight, so `metrics()` can report
     executor-wait pressure the same way the DB pool reports its own
-    (see roadmap section 4.4: `db_executor_wait`)."""
+    (see roadmap section 4.4: `application_data_executor_wait`)."""
 
     def __init__(self, name: str, max_workers: int):
         self._name = name
@@ -130,9 +130,11 @@ class _TrackedExecutor:
 # still come from configure_executors() at startup, tied to the real
 # connection pool sizes -- this is only the fallback.
 _default_sizing = recommended_sizing()
-_db = _TrackedExecutor("db", max_workers=_default_sizing.db_executor_workers)
-_service = _TrackedExecutor(
-    "service", max_workers=_default_sizing.service_executor_workers
+_application_data_executor = _TrackedExecutor(
+    "application_data", max_workers=_default_sizing.application_data_executor_workers
+)
+_application_state_executor = _TrackedExecutor(
+    "application_state", max_workers=_default_sizing.application_state_executor_workers
 )
 _background = _TrackedExecutor(
     "background", max_workers=_default_sizing.background_executor_workers
@@ -141,32 +143,32 @@ _background = _TrackedExecutor(
 
 def configure_executors(
     *,
-    db_workers: int | None = None,
-    service_workers: int | None = None,
+    application_data_workers: int | None = None,
+    state_workers: int | None = None,
     background_workers: int | None = None,
 ) -> None:
     """(Re)size the shared executors. Call once at startup, before the
     first request, with sizes derived from the real connection pool
-    configuration -- e.g. `db_workers = warehouse_pool.max_size + 2`.
+    configuration -- e.g. `application_data_workers = data_pool.max_size + 2`.
     Safe to call more than once (each call replaces the pool outright),
     but only when no work is currently in flight against the old one."""
-    if db_workers is not None:
-        _db.resize(db_workers)
-    if service_workers is not None:
-        _service.resize(service_workers)
+    if application_data_workers is not None:
+        _application_data_executor.resize(application_data_workers)
+    if state_workers is not None:
+        _application_state_executor.resize(state_workers)
     if background_workers is not None:
         _background.resize(background_workers)
 
 
-async def run_in_db_executor(fn: Callable, *args: Any, **kwargs: Any) -> Any:
-    """Run a blocking warehouse call off the event loop thread."""
-    return await _db.run(fn, *args, **kwargs)
+async def run_in_application_data_executor(fn: Callable, *args: Any, **kwargs: Any) -> Any:
+    """Run a blocking application data call off the event loop thread."""
+    return await _application_data_executor.run(fn, *args, **kwargs)
 
 
-async def run_in_service_executor(fn: Callable, *args: Any, **kwargs: Any) -> Any:
-    """Run a blocking service-db call (auth, cache reads/writes) off
-    the event loop thread, isolated from warehouse query load."""
-    return await _service.run(fn, *args, **kwargs)
+async def run_in_state_executor(fn: Callable, *args: Any, **kwargs: Any) -> Any:
+    """Run a blocking state-store call (auth, cache reads/writes) off
+    the event loop thread, isolated from application data query load."""
+    return await _application_state_executor.run(fn, *args, **kwargs)
 
 
 async def run_in_background(fn: Callable, *args: Any, **kwargs: Any) -> Any:
@@ -177,12 +179,12 @@ async def run_in_background(fn: Callable, *args: Any, **kwargs: Any) -> Any:
     return await _background.run(fn, *args, **kwargs)
 
 
-def db_executor() -> _TrackedExecutor:
-    return _db
+def application_data_executor() -> _TrackedExecutor:
+    return _application_data_executor
 
 
-def service_executor() -> _TrackedExecutor:
-    return _service
+def application_state_executor() -> _TrackedExecutor:
+    return _application_state_executor
 
 
 def background_executor() -> _TrackedExecutor:
@@ -191,8 +193,8 @@ def background_executor() -> _TrackedExecutor:
 
 def all_executor_metrics() -> dict[str, ExecutorMetrics]:
     return {
-        "db": _db.metrics(),
-        "service": _service.metrics(),
+        "application_data": _application_data_executor.metrics(),
+        "application_state": _application_state_executor.metrics(),
         "background": _background.metrics(),
     }
 
@@ -202,8 +204,8 @@ def shutdown_all_executors(wait: bool = True) -> None:
     after anything that might still submit work to them (the cache
     persistence queue, in particular) has already stopped and drained
     -- see core.app.lifespan's step ordering."""
-    _db.shutdown(wait=wait)
-    _service.shutdown(wait=wait)
+    _application_data_executor.shutdown(wait=wait)
+    _application_state_executor.shutdown(wait=wait)
     _background.shutdown(wait=wait)
 
 

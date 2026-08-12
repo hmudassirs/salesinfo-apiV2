@@ -1,6 +1,6 @@
 """Persistent /api/query result cache (PostgreSQL-backed).
 
-Renamed from service_manager.py's QueryCacheService to QueryResultCache
+Renamed from application_services.py's QueryCacheService to QueryResultCache
 to stop colliding with core.db.cache's LRU/TTL in-memory QueryCache
 classes — same word, two unrelated caches.
 """

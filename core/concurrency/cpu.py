@@ -1,6 +1,6 @@
 """CPU-count detection and core-count-derived sizing for pools/executors
 (roadmap gap noted after the initial refactor: every pool/executor size
-was a hardcoded constant -- 10 DB connections, 12 db_executor threads,
+was a hardcoded constant -- 10 DB connections, 12 application_data_executor threads,
 etc -- picked for whatever machine happened to run the load test, not
 derived from the hardware actually available. That means the same
 config either starves a bigger box or oversubscribes a smaller one.
@@ -100,33 +100,33 @@ class ConcurrencySizing:
 
     cpu_count: int
 
-    # --- Warehouse pool (PostgreSQL) ---
+    # --- Data pool (PostgreSQL) ---
     # A PostgreSQL connection is network-bound, not CPU-bound like an
     # embedded engine -- a connection spends most of its time waiting
     # on the round trip / the server, not consuming a core on this
-    # process. So, like the service pool below, this is sized as a
+    # process. So, like the application state pool below, this is sized as a
     # multiple of cores (more concurrent waiters than cores, since they
     # spend part of their time blocked on I/O, not compute), not pinned
     # to the core count itself.
-    db_pool_min: int
-    db_pool_max: int
+    application_data_pool_min: int
+    application_data_pool_max: int
 
-    # --- Service DB pool (auth, cache, logging) ---
-    # Same PostgreSQL database as the warehouse pool above, through a
-    # separate connection pool (see core.storage.service_db's module
+    # --- Application state pool (auth, cache, logging) ---
+    # Same PostgreSQL database as the data pool above, through a
+    # separate connection pool (see core.storage.application_state_store's module
     # docstring for why a separate pool) -- small, mostly-indexed
     # reads/writes, so a modest multiple of cores is reasonable here
     # too.
-    service_pool_min: int
-    service_pool_max: int
+    state_pool_min: int
+    state_pool_max: int
 
     # --- Dedicated executors (core/concurrency/executors.py) ---
     # Each executor's threads mostly *wait* on a pool acquire + a
     # blocking driver call, so it's sized a little above its matching
     # pool's max, not equal to it -- enough headroom that a connection
     # freeing up doesn't have to wait for a thread to free up too.
-    db_executor_workers: int
-    service_executor_workers: int
+    application_data_executor_workers: int
+    application_state_executor_workers: int
     # Background work (cache persistence, access-stat writes) never
     # needs to track pool size the way request-serving executors do --
     # it's explicitly OK for this to be smaller, since it exists to
@@ -156,12 +156,12 @@ def recommended_sizing(cpu_count: Optional[int] = None) -> ConcurrencySizing:
 
     return ConcurrencySizing(
         cpu_count=n,
-        db_pool_min=max(2, n // 2),
-        db_pool_max=max(4, n * 2),
-        service_pool_min=max(2, n // 2),
-        service_pool_max=max(4, n * 2),
-        db_executor_workers=max(4, n) + 2,
-        service_executor_workers=max(4, n * 2) + 2,
+        application_data_pool_min=max(2, n // 2),
+        application_data_pool_max=max(4, n * 2),
+        state_pool_min=max(2, n // 2),
+        state_pool_max=max(4, n * 2),
+        application_data_executor_workers=max(4, n) + 2,
+        application_state_executor_workers=max(4, n * 2) + 2,
         background_executor_workers=max(2, n),
         fast_query_concurrency=max(20, n * 25),
         normal_query_concurrency=max(8, n * 10),

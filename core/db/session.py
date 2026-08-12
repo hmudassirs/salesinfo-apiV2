@@ -68,12 +68,12 @@ except Exception:
 
 logger = get_logger(__name__)
 
-# Dedicated bounded executor for warehouse work -- see
+# Dedicated bounded executor for application data work -- see
 # core/concurrency/executors.py's module docstring for why this
 # replaced routing every blocking call through asyncio.to_thread's
 # single shared default executor (roadmap rule #5: no one oversized
 # global thread pool for unrelated workloads).
-from core.concurrency.executors import run_in_db_executor
+from core.concurrency.executors import run_in_application_data_executor
 
 from core.db.protocols import DatabaseAdapter as DBAdapter
 
@@ -100,9 +100,9 @@ async def _run_in_thread(fn, *args):
         with _TRACER.start_as_current_span(span_name) as span:
             if args and isinstance(args[0], str):
                 span.set_attribute("db.statement", args[0][:200])
-            result = await run_in_db_executor(fn, *args)
+            result = await run_in_application_data_executor(fn, *args)
     else:
-        result = await run_in_db_executor(fn, *args)
+        result = await run_in_application_data_executor(fn, *args)
 
     elapsed = time.perf_counter() - start
     if APP_LATENCY is not None:
@@ -236,7 +236,7 @@ class DatabaseSession:
             # independent — sharing one connection across concurrently
             # -used pooled "slots" corrupts it under concurrent access
             # (this is the same class of bug found and fixed in
-            # ServiceDatabase's connection layer).
+            # ApplicationStateStore's connection layer).
             pooled_adapter = self._create_adapter()
             await _run_in_thread(pooled_adapter.connect)
             if InstrumentedSQLAdapter is not None:

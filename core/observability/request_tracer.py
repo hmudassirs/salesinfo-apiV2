@@ -1,11 +1,11 @@
-"""Distributed request tracing, persisted to the service database. Renamed from the old `TracingService` to avoid colliding with core.db.tracing's generic TracingContext/@traced_operation, an unrelated in-process utility."""
+"""Distributed request tracing, persisted to the application state store. Renamed from the old `TracingService` to avoid colliding with core.db.tracing's generic TracingContext/@traced_operation, an unrelated in-process utility."""
 
 import json
 import time
 from typing import Any, Dict, List, Optional
 
 from core.db.logger import get_logger
-from core.storage.service_db import ServiceDatabase
+from core.storage.application_state_store import ApplicationStateStore
 
 logger = get_logger(__name__)
 
@@ -13,13 +13,13 @@ logger = get_logger(__name__)
 class RequestTracer:
     """Service for managing distributed traces."""
 
-    def __init__(self, service_db: ServiceDatabase):
+    def __init__(self, application_state: ApplicationStateStore):
         """Initialize tracing service.
 
         Args:
-            service_db: Service database instance
+            application_state: Application state store instance
         """
-        self.service_db = service_db
+        self.application_state = application_state
 
     def start_trace(
         self,
@@ -75,9 +75,9 @@ class RequestTracer:
 
         try:
             if _adapter is not None:
-                self.service_db.execute_on(_adapter, sql, params)
+                self.application_state.execute_on(_adapter, sql, params)
             else:
-                self.service_db.execute(sql, params)
+                self.application_state.execute(sql, params)
             return span_id
         except Exception as e:
             logger.error(f"Failed to start trace: {e}")
@@ -120,9 +120,9 @@ class RequestTracer:
         read_sql = "SELECT start_time FROM traces WHERE trace_id = ? AND span_id = ?"
         read_params = (trace_id, span_id)
         if _adapter is not None:
-            start_result = self.service_db.fetch_one_on(_adapter, read_sql, read_params)
+            start_result = self.application_state.fetch_one_on(_adapter, read_sql, read_params)
         else:
-            start_result = self.service_db.fetch_one(read_sql, read_params)
+            start_result = self.application_state.fetch_one(read_sql, read_params)
 
         duration_ms = 0
         if start_result:
@@ -157,9 +157,9 @@ class RequestTracer:
 
         try:
             if _adapter is not None:
-                self.service_db.execute_on(_adapter, sql, params)
+                self.application_state.execute_on(_adapter, sql, params)
             else:
-                self.service_db.execute(sql, params)
+                self.application_state.execute(sql, params)
         except Exception as e:
             logger.error(f"Failed to end trace: {e}")
 
@@ -234,7 +234,7 @@ class RequestTracer:
         params.extend([limit, offset])
 
         try:
-            rows = self.service_db.fetch_all(sql, tuple(params))
+            rows = self.application_state.fetch_all(sql, tuple(params))
             traces = []
             for row in rows:
                 trace_dict = dict(row)

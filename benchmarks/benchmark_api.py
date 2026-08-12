@@ -2,7 +2,7 @@
 """Benchmark a representative FastAPI app's request cycle end to end.
 
 Builds one minimal app with two routes — `/fast` (returns immediately)
-and `/query` (a SQL read via `InstrumentedServiceDatabase.fetch_one`,
+and `/query` (a SQL read via `InstrumentedApplicationStateStore.fetch_one`,
 dispatched through `asyncio.to_thread` the way this codebase's real
 query route keeps synchronous DB work off the event loop) — served
 in-process over `httpx.ASGITransport` (no real socket, no external
@@ -43,11 +43,12 @@ from benchmarks._common import (
     stage_breakdown,
     write_json_results,
 )
-from core.performance.adapters.service_db import InstrumentedServiceDatabase
+from core.performance.adapters.application_state import InstrumentedApplicationStateStore
 from core.performance.config import PerformanceConfig
 from core.performance.middleware.fastapi import install_performance_middleware
 from core.performance.registry import PerformanceRegistry
-from core.storage.service_db import ServiceDatabase
+from core.storage.application_state_store import ApplicationStateStore
+from core.storage.schema import ApplicationStateSchema
 
 _SELECT_SQL = "SELECT username FROM users WHERE user_id = ?"
 _USER_ID = "benchmark_api_u1"
@@ -63,15 +64,15 @@ def _pg_kwargs() -> dict:
     }
 
 
-def _build_seeded_database() -> ServiceDatabase:
-    """Needs a reachable PostgreSQL server -- the service database has
-    no other backend (see core/storage/service_db.py's module
+def _build_seeded_database() -> ApplicationStateStore:
+    """Needs a reachable PostgreSQL server -- the application state store has
+    no other backend (see core/storage/application_state_store.py's module
     docstring). Point it at one with PGHOST/PGPORT/PGDATABASE/PGUSER/
     PGPASSWORD, same as run_api.py (defaults: localhost:5432/postgres/
     postgres)."""
-    db = ServiceDatabase.for_postgres(min_size=2, max_size=8, **_pg_kwargs())
+    db = ApplicationStateStore.for_postgres(min_size=2, max_size=8, **_pg_kwargs())
     db.connect()
-    db.create_tables()
+    ApplicationStateSchema(db).create()
     db.execute(
         "INSERT INTO users "
         "(user_id, username, email, password_hash, created_at, updated_at) "
@@ -85,8 +86,8 @@ def _build_seeded_database() -> ServiceDatabase:
 def _build_app(config: PerformanceConfig, registry: PerformanceRegistry) -> FastAPI:
     app = FastAPI()
     install_performance_middleware(app, config=config, registry=registry)
-    instrumented_db = InstrumentedServiceDatabase(_build_seeded_database())
-    app.state.service_db = instrumented_db._db  # for cleanup in _run_named
+    instrumented_db = InstrumentedApplicationStateStore(_build_seeded_database())
+    app.state.application_state = instrumented_db.application_state  # for cleanup in _run_named
 
     @app.get("/fast")
     async def fast() -> dict[str, bool]:
@@ -146,9 +147,9 @@ async def _run_named(
     try:
         durations, errors = await _drive_load(app, iterations, concurrency)
     finally:
-        service_db: ServiceDatabase = app.state.service_db
-        service_db.execute("DELETE FROM users WHERE user_id = ?", (_USER_ID,))
-        service_db.disconnect()
+        application_state: ApplicationStateStore = app.state.application_state
+        application_state.execute("DELETE FROM users WHERE user_id = ?", (_USER_ID,))
+        application_state.disconnect()
     total_seconds = asyncio.get_running_loop().time() - loop_start
     result = BenchmarkResult(
         name=name,

@@ -34,4 +34,6 @@ data/mydatabase.duckdb
 logs/
 scripts/
 gittoken.txt
-
+.pytest_cache/
+api-efficiency/
+docs/

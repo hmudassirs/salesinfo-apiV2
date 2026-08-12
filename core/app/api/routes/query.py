@@ -7,7 +7,7 @@ from core.app.api.dependencies import (
     CurrentUser,
     GetCurrentUser,
     GetDB,
-    GetServiceManager,
+    GetApplicationServices,
 )
 from core.app.api.schemas import (
     HealthResponse,
@@ -41,7 +41,7 @@ async def health_check(
 
     Uses `check_async()`, not `check_sync()`: the app's lifespan now runs
     in async mode and initializes an async connection pool
-    (`DataWarehouseStep.startup_async()` -> `db_session.initialize()`),
+    (`ApplicationDataStep.startup_async()` -> `db_session.initialize()`),
     so `check_sync()` would reach for a sync pool that was never created.
     `check_async()` is a real coroutine, so it must be awaited.
 
@@ -259,7 +259,7 @@ async def execute_query(
     request: Request,
     query: QueryRequest,
     db_session: DatabaseSession = GetDB,
-    service_manager=GetServiceManager,
+    application_services=GetApplicationServices,
     current_user: CurrentUser = GetCurrentUser,
 ) -> QueryResponse:
     """Execute a SQL query with caching.
@@ -288,7 +288,7 @@ async def execute_query(
     settings: AppSettings = request.app.state.settings
     service = QueryService(
         db_session,
-        service_manager.query_cache,
+        application_services.query_cache,
         require_write_scope=settings.require_write_scope_for_mutations,
         precise_cache_invalidation=settings.cache_invalidation_precise,
     )

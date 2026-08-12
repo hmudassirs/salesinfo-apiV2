@@ -1,10 +1,10 @@
-"""Application/request event logging, persisted to the service database."""
+"""Application/request event logging, persisted to the application state store."""
 
 import time
 from typing import Any, Dict, List, Optional
 
 from core.db.logger import get_logger
-from core.storage.service_db import ServiceDatabase
+from core.storage.application_state_store import ApplicationStateStore
 
 logger = get_logger(__name__)
 
@@ -12,13 +12,13 @@ logger = get_logger(__name__)
 class RequestLogger:
     """Service for managing application logs."""
 
-    def __init__(self, service_db: ServiceDatabase):
+    def __init__(self, application_state: ApplicationStateStore):
         """Initialize logging service.
 
         Args:
-            service_db: Service database instance
+            application_state: Application state store instance
         """
-        self.service_db = service_db
+        self.application_state = application_state
 
     def log_event(
         self,
@@ -52,7 +52,7 @@ class RequestLogger:
             ip_address: Client IP address
             user_agent: User agent string
             _adapter: Optional pre-acquired connection (from
-                ServiceDatabase.transaction()) to run on instead of
+                ApplicationStateStore.transaction()) to run on instead of
                 acquiring/committing a new one — see
                 emit_request_observability(), which batches this call
                 together with tracing/audit into one transaction.
@@ -84,9 +84,9 @@ class RequestLogger:
 
         try:
             if _adapter is not None:
-                self.service_db.execute_on(_adapter, sql, params)
+                self.application_state.execute_on(_adapter, sql, params)
             else:
-                self.service_db.execute(sql, params)
+                self.application_state.execute(sql, params)
         except Exception as e:
             # Don't let logging failures crash the application
             print(f"Failed to log event: {e}")
@@ -150,7 +150,7 @@ class RequestLogger:
         params.extend([limit, offset])
 
         try:
-            rows = self.service_db.fetch_all(sql, tuple(params))
+            rows = self.application_state.fetch_all(sql, tuple(params))
             return [dict(row) for row in rows]
         except Exception as e:
             logger.error(f"Failed to retrieve logs: {e}")

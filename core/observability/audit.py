@@ -1,11 +1,11 @@
-"""Security/compliance audit trail (who did what, when), persisted to the service database."""
+"""Security/compliance audit trail (who did what, when), persisted to the application state store."""
 
 import json
 import time
 from typing import Any, Dict, List, Optional
 
 from core.db.logger import get_logger
-from core.storage.service_db import ServiceDatabase
+from core.storage.application_state_store import ApplicationStateStore
 
 logger = get_logger(__name__)
 
@@ -13,13 +13,13 @@ logger = get_logger(__name__)
 class AuditTrail:
     """Service for managing audit logs."""
 
-    def __init__(self, service_db: ServiceDatabase):
+    def __init__(self, application_state: ApplicationStateStore):
         """Initialize audit service.
 
         Args:
-            service_db: Service database instance
+            application_state: Application state store instance
         """
-        self.service_db = service_db
+        self.application_state = application_state
 
     def log_audit_event(
         self,
@@ -89,9 +89,9 @@ class AuditTrail:
 
         try:
             if _adapter is not None:
-                self.service_db.execute_on(_adapter, sql, params)
+                self.application_state.execute_on(_adapter, sql, params)
             else:
-                self.service_db.execute(sql, params)
+                self.application_state.execute(sql, params)
         except Exception as e:
             logger.error(f"Failed to log audit event: {e}")
 
@@ -172,7 +172,7 @@ class AuditTrail:
         params.extend([limit, offset])
 
         try:
-            rows = self.service_db.fetch_all(sql, tuple(params))
+            rows = self.application_state.fetch_all(sql, tuple(params))
             events = []
             for row in rows:
                 event_dict = dict(row)

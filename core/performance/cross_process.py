@@ -13,7 +13,7 @@ requests actually fired, because 3 of the 4 workers' history was never
 represented at all.
 
 This module closes that gap using the one thing every worker already
-shares: the same Postgres database (`core.storage.service_db`). Each
+shares: the same Postgres database (`core.storage.application_state_store`). Each
 worker periodically publishes its own
 `core.performance.dashboard.summary.build_performance_summary(...)`
 output here, keyed by `"hostname:pid"` (see `PerformanceStep` in
@@ -42,7 +42,7 @@ import socket
 import time
 from typing import Any
 
-from core.storage.service_db import ServiceDatabase
+from core.storage.application_state_store import ApplicationStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -56,9 +56,9 @@ class WorkerSnapshotStore:
     """Publish this worker's snapshot / collect every fresh worker's."""
 
     def __init__(
-        self, service_db: ServiceDatabase, worker_id_override: str | None = None
+        self, application_state: ApplicationStateStore, worker_id_override: str | None = None
     ) -> None:
-        self._service_db = service_db
+        self._application_state = application_state
         self.worker_id = worker_id_override or worker_id()
 
     def publish(self, snapshot: dict[str, Any]) -> None:
@@ -73,7 +73,7 @@ class WorkerSnapshotStore:
         """
         payload = json.dumps(snapshot)
         try:
-            self._service_db.execute(
+            self._application_state.execute(
                 """
                 INSERT INTO perf_worker_snapshots
                     (worker_id, hostname, pid, updated_at, snapshot_json)
@@ -107,7 +107,7 @@ class WorkerSnapshotStore:
         as fresh as its last read, not proactively pruned.
         """
         cutoff = int(time.time() - max_age_seconds)
-        rows = self._service_db.fetch_all(
+        rows = self._application_state.fetch_all(
             "SELECT worker_id, snapshot_json FROM perf_worker_snapshots "
             "WHERE updated_at >= ?",
             (cutoff,),

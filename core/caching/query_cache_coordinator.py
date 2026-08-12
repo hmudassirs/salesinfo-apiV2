@@ -3,13 +3,13 @@ existing L2 (PostgreSQL) query result cache.
 
 Why this exists (roadmap sections 3 and 6): before this module, every
 single request -- including N *identical* concurrent requests for the
-same not-yet-cached query -- independently hit the L2 cache (a
-service-database read, plus a synchronous access-stat write on every
+same not-yet-cached query -- independently hit the L2 cache (an
+application-state-store read, plus a synchronous access-stat write on every
 hit) and, on a miss, independently executed the same query against the
-warehouse connection pool. Under a burst of duplicate traffic (the
+application data connection pool. Under a burst of duplicate traffic (the
 exact shape of the load test: 500 concurrent identical `SELECT 1`s)
-that means 500 service-database reads and up to 500 redundant
-warehouse executions competing for a pool of 10 connections, when one
+that means 500 application-state-store reads and up to 500 redundant
+application data executions competing for a pool of 10 connections, when one
 execution would have satisfied all 500 callers.
 
 This coordinator fixes both problems:
@@ -39,7 +39,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Set
 
 from core.caching.persistence_queue import submit_persist_job
 from core.caching.query_result_cache import QueryResultCache
-from core.concurrency.executors import run_in_background, run_in_service_executor
+from core.concurrency.executors import run_in_background, run_in_state_executor
 from core.db.cache import HybridQueryCache
 from core.db.logger import get_logger
 
@@ -114,7 +114,7 @@ class QueryCacheCoordinator:
         Args:
             cache_key: pre-computed cache key for this query+params.
             run_query: coroutine function that actually executes the
-                query against the warehouse if nothing is cached.
+                query against the application data store if nothing is cached.
             on_miss_persist: optional coroutine function called (via
                 fire-and-forget on the background executor, not
                 awaited inline) with the fresh result data when this
@@ -165,7 +165,7 @@ class QueryCacheCoordinator:
         on_miss_persist: Optional[Callable[[list], Awaitable[None]]],
         tables: Optional[Set[str]],
     ) -> CacheLookupResult:
-        l2_row = await run_in_service_executor(self._l2.get_cached_result, cache_key)
+        l2_row = await run_in_state_executor(self._l2.get_cached_result, cache_key)
         if l2_row:
             data = json.loads(l2_row["result_data"])
             self._l1.put(cache_key, data, ttl=self._l1_ttl_seconds)
@@ -202,13 +202,13 @@ class QueryCacheCoordinator:
         """Drop every cached entry, L1 and L2, e.g. after a write
         statement whose affected tables couldn't be determined
         (roadmap 16.3). L1 is cleared inline (cheap, in-process); L2
-        goes through the service executor since it's a blocking (sync)
-        service-database call."""
+        goes through the application-state executor since it's a blocking (sync)
+        application-state-store call."""
         async with self._lock:
             self._key_tables.clear()
             self._table_keys.clear()
         self._l1.clear()
-        await run_in_service_executor(self._l2.clear_all)
+        await run_in_state_executor(self._l2.clear_all)
 
     async def invalidate_tables(self, tables: Set[str]) -> bool:
         """Invalidate only the cache entries tagged with one of `tables`.
@@ -244,7 +244,7 @@ class QueryCacheCoordinator:
         for key in keys_to_drop:
             self._l1.invalidate(key)
         for table in tables:
-            await run_in_service_executor(self._l2.invalidate_cache, query_pattern=table)
+            await run_in_state_executor(self._l2.invalidate_cache, query_pattern=table)
         return True
 
     async def persist_l2(

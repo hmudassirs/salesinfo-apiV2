@@ -20,9 +20,9 @@ sql_logger = get_logger("core.db.adapters.sql")
 def translate_qmark_placeholders(sql: str) -> str:
     """Translate `?`-style positional placeholders (what every existing
     `/api/query` client and the rest of this codebase's SQL was written
-    against, a convention carried over from when this codebase also
-    supported DuckDB/SQLite as backends) to psycopg2's `%s` pyformat
-    style.
+    against, a convention carried over from an earlier DuckDB/SQLite
+    era -- PostgreSQL is the sole supported backend now) to
+    psycopg2's `%s` pyformat style.
 
     A plain `sql.replace("?", "%s")` would also mangle any literal
     `?` inside a quoted string (e.g. `WHERE note = 'really?'`), so
@@ -35,7 +35,7 @@ def translate_qmark_placeholders(sql: str) -> str:
     handle correctly is a `?` that stays a literal `?` (a query error
     from Postgres), never a placeholder inserted somewhere wrong.
 
-    Public (not `_`-prefixed) because `core.storage.service_db`'s
+    Public (not `_`-prefixed) because `core.storage.application_state_store`'s
     Postgres-backed adapter reuses it too, so every `?`-placeholder
     query in this codebase is translated identically regardless of
     which adapter runs it -- see that module's docstring.

@@ -1,6 +1,6 @@
 # salesdata-api
 
-A FastAPI service that exposes a PostgreSQL data warehouse over HTTP:
+A FastAPI service that exposes a PostgreSQL database over HTTP:
 authenticated ad-hoc SQL (`/api/query`), table introspection, user/API-key
 management, and operational metrics (pool/executor/cache/concurrency health
 at `/api/health` and `/api/dashboard`).
@@ -33,10 +33,10 @@ A `.env.dev` file at the project root (loaded automatically by `run_api.py`
 via `load_dotenv(".env.dev")`) is a convenient place to set all of the above
 for local development instead of exporting them by hand.
 
-There is one PostgreSQL database backing everything -- the data warehouse
-and the "service" tables (users, API keys, query result cache L2, logs,
+There is one PostgreSQL database backing everything -- the application data
+and the application state tables (users, API keys, query result cache L2, logs,
 traces, audit log) live side by side in it; see
-`core/storage/service_db.py`'s module docstring for why that's a deliberate
+`core/storage/application_state_store.py`'s module docstring for why that's a deliberate
 choice, not a temporary one. Being one real database (not an embedded,
 on-disk, single-process file) is what makes `--workers N>1` safe, and what
 makes the per-process JWT revocation record and auth rate limiter
@@ -57,20 +57,20 @@ shared one -- a correctness-preserving efficiency/consistency tradeoff,
 worth knowing before scaling out, not a startup-time failure.
 
 See `run_api.py`'s module docstring for the full list of pool/executor-sizing
-environment variables (`DB_POOL_MIN_SIZE`, `DB_EXECUTOR_WORKERS`, etc.).
+environment variables (`APPLICATION_DATA_POOL_MIN_SIZE`, `APPLICATION_DATA_EXECUTOR_WORKERS`, etc.).
 
 ## Schema migrations
 
 The schema is managed through versioned SQL files under
-`migrations/warehouse_postgres/`, tracked in a `schema_migrations` table --
+`migrations/postgresql/`, tracked in a `schema_migrations` table --
 not applied ad hoc at startup, and not Alembic (this codebase talks to
 Postgres through a hand-written adapter, not an ORM, so Alembic's
 SQLAlchemy-metadata model doesn't have anything to hook into here). Applied
-at startup by `DataWarehouseStep`. See `core/db/migrations.py`'s module
+at startup by `ApplicationDataStep`. See `core/db/migrations.py`'s module
 docstring for the full design.
 
 To add a schema change: drop a new `NNNN_description.sql` file (next
-version number, zero-padded to 4 digits) into `migrations/warehouse_postgres/`.
+version number, zero-padded to 4 digits) into `migrations/postgresql/`.
 Every statement in it should be idempotent (`CREATE TABLE IF NOT EXISTS`,
 etc.) -- see the migrations module docstring for why that matters here
 specifically.
@@ -121,9 +121,9 @@ core/
   concurrency/  per-workload thread pools, query concurrency limits
   observability/ request context, logging/tracing/audit, alerts
   services/     QueryService -- the core /api/query execution path
-  storage/      Postgres-backed service database (users, keys, cache, audit)
+  storage/      Postgres-backed application state store (users, keys, cache, audit)
 migrations/
-  warehouse_postgres/   PostgreSQL schema (see "Schema migrations" above)
+  postgresql/   PostgreSQL schema (see "Schema migrations" above)
 run_api.py      entrypoint
 bootstrap_admin.py  seed/reset the initial admin user
 load_test.py    standalone load-test script

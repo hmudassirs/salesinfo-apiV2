@@ -1,8 +1,8 @@
 """Authentication and authorization: users, API keys, JWT, middleware.
 
 Everything about "who is this caller" now lives here, instead of being
-spread across core/services/service_db.py, service_manager.py,
-core/auth/service.py, and core/app/api/app.py.
+spread across core/storage/application_state_store.py, core/application_services.py,
+core/auth/api_key_service.py, and core/app/api/app.py.
 """
 
 from typing import TYPE_CHECKING
@@ -26,13 +26,13 @@ def __getattr__(name: str) -> object:
     eagerly at module load time. That made merely running
     `import core.auth` (or importing any single submodule of it, e.g.
     `core.auth.passwords`) eagerly pull in the whole composition chain:
-    `core.auth.api_key_service` -> `core.service_registry` ->
-    `core.auth.api_key_repository` -> `core.storage.service_db`. If
-    `core.storage.service_db` was the module *already* mid-import when
+    `core.auth.api_key_service` -> `core.application_services` ->
+    `core.auth.api_key_repository` -> `core.storage.application_state_store`. If
+    `core.storage.application_state_store` was the module *already* mid-import when
     that chain reached it (its own `from core.auth.passwords import
     hash_password` is exactly the kind of import that used to trigger
     this), Python would find a partially-initialized module missing the
-    `ServiceDatabase` class it hadn't defined yet, raising a circular-
+    `ApplicationStateStore` class it hadn't defined yet, raising a circular-
     import `ImportError` — reproducible via a bare `import core.storage`
     as the first thing touching either subsystem in a fresh process.
     Deferring these four names to first attribute access means

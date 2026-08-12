@@ -6,7 +6,7 @@ file did what without opening each one."""
 
 import asyncio
 
-from core.concurrency.executors import run_in_service_executor
+from core.concurrency.executors import run_in_state_executor
 from core.performance.context import get_current_profiler
 from core.performance.enums import PerformanceStage
 from core.performance.types import MetricName
@@ -15,8 +15,8 @@ import secrets
 import time
 from typing import Optional
 
+from core.auth.api_key_repository import APIKeyRepository
 from core.db.logger import get_logger
-from core.service_registry import ServiceManager
 
 logger = get_logger(__name__)
 
@@ -24,18 +24,27 @@ logger = get_logger(__name__)
 class APIKeyService:
     """Service for managing API keys.
 
-    Every call into `self.service_manager.api_keys` here is offloaded via
+    Takes an `APIKeyRepository` directly rather than the whole
+    `ApplicationServices` composition aggregate -- this used to receive
+    `ApplicationServices` and reach into `.api_keys`, which meant every
+    caller had to build (or have on hand) the entire aggregate just to
+    get this one repository, and coupled this service's dependency
+    chain to composition-root internals it has no other reason to know
+    about. See core.app.api.dependencies.get_api_key_service for the
+    FastAPI-side wiring.
+
+    Every call into `self.repository` here is offloaded via
     `asyncio.to_thread` — those calls are blocking psycopg2 I/O underneath
-    (see core/storage/service_db.py), and this class is always called
+    (see core/storage/application_state_store.py), and this class is always called
     from async request-handling code (the auth middleware, in particular,
     on literally every request). Calling them directly would block the
-    whole event loop for the duration of each service-database round-trip — this
+    whole event loop for the duration of each application-state-store round-trip — this
     was a real, measured bottleneck earlier in this codebase's history
     (500 concurrent requests collapsing to ~8 req/s) before being fixed.
     """
 
     # Per-process, short-TTL cache of validated keys: api_key_hash ->
-    # (validated_dict, expires_at_monotonic). Avoids a service-database round-trip
+    # (validated_dict, expires_at_monotonic). Avoids an application-state-store round-trip
     # on every request from a client reusing the same key repeatedly.
     # TTL bounds the window in which a revoked/deleted key would still
     # authenticate — keep this short (seconds, not minutes); the goal is
@@ -47,7 +56,7 @@ class APIKeyService:
     # 
     # This cache is single-flight protected as well: if many requests
     # arrive simultaneously with the same raw API key and the entry is
-    # not in the cache, only one of them does the service-db validation.
+    # not in the cache, only one of them does the state-store validation.
     _validation_cache: dict = {}
     _validation_lock = asyncio.Lock()
     _validation_inflight: dict = {}
@@ -55,13 +64,14 @@ class APIKeyService:
     _validation_cache_hits: int = 0
     _validation_cache_misses: int = 0
 
-    def __init__(self, service_manager: ServiceManager):
+    def __init__(self, repository: APIKeyRepository):
         """Initialize API key service.
 
         Args:
-            service_manager: Service manager instance for auxiliary data
+            repository: APIKeyRepository instance to read/write api_keys
+                through.
         """
-        self.service_manager = service_manager
+        self.repository = repository
 
     @staticmethod
     def generate_api_key() -> str:
@@ -106,8 +116,8 @@ class APIKeyService:
         created_at = int(time.time())
 
         try:
-            await run_in_service_executor(
-                self.service_manager.api_keys.create,
+            await run_in_state_executor(
+                self.repository.create,
                 key_id=key_id,
                 api_key_hash=api_key_hash,
                 owner_id=owner_id,
@@ -183,8 +193,8 @@ class APIKeyService:
 
         try:
             now = int(time.time())
-            result = await run_in_service_executor(
-                self.service_manager.api_keys.validate, api_key_hash, now
+            result = await run_in_state_executor(
+                self.repository.validate, api_key_hash, now
             )
             if not result:
                 validated = None
@@ -233,8 +243,8 @@ class APIKeyService:
             List of API key metadata (hashed keys)
         """
         try:
-            results = await run_in_service_executor(
-                self.service_manager.api_keys.list_by_owner, owner_id
+            results = await run_in_state_executor(
+                self.repository.list_by_owner, owner_id
             )
             return [
                 {
@@ -262,8 +272,8 @@ class APIKeyService:
             True if revoked, False if not found
         """
         try:
-            result = await run_in_service_executor(
-                self.service_manager.api_keys.revoke, key_id, owner_id
+            result = await run_in_state_executor(
+                self.repository.revoke, key_id, owner_id
             )
             if result:
                 logger.info(f"Revoked API key {key_id}")
@@ -284,8 +294,8 @@ class APIKeyService:
             True if deleted, False if not found
         """
         try:
-            result = await run_in_service_executor(
-                self.service_manager.api_keys.delete, key_id, owner_id
+            result = await run_in_state_executor(
+                self.repository.delete, key_id, owner_id
             )
             if result:
                 logger.info(f"Deleted API key {key_id}")

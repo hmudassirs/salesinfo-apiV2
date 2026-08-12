@@ -22,20 +22,20 @@ def _record(app: FastAPI, request: Request, **kwargs) -> None:
     only when it would actually do blocking I/O.
 
     With the background write queue active (the normal case —
-    see ApplicationLifespan's ServiceDatabaseStep), emit_request_
+    see ApplicationLifespan's ApplicationStateStep), emit_request_
     observability() just builds a dict and does an in-memory queue put;
     there's no I/O to offload, and routing it through asyncio.to_thread
     anyway means competing for the same thread pool every real DB call
     also needs, for no benefit. Only the no-queue fallback path (rare —
-    simplified test setups) does synchronous service-database I/O and
+    simplified test setups) does synchronous application-state-store I/O and
     genuinely needs the thread.
     """
-    service_manager = app.state.service_manager
-    if getattr(service_manager, "observability_queue", None) is not None:
-        emit_request_observability(service_manager, request, **kwargs)
+    application_services = app.state.application_services
+    if getattr(application_services, "observability_queue", None) is not None:
+        emit_request_observability(application_services, request, **kwargs)
         return None  # caller doesn't need to await anything
     return asyncio.to_thread(
-        emit_request_observability, service_manager, request, **kwargs
+        emit_request_observability, application_services, request, **kwargs
     )
 
 
@@ -54,7 +54,7 @@ def install_observability_middleware(app: FastAPI) -> None:
             response: Response = await call_next(request)
             process_time = time.time() - start_time
 
-            if hasattr(app.state, "service_manager"):
+            if hasattr(app.state, "application_services"):
                 try:
                     maybe_awaitable = _record(
                         app,
@@ -75,7 +75,7 @@ def install_observability_middleware(app: FastAPI) -> None:
         except Exception as e:
             process_time = time.time() - start_time
 
-            if hasattr(app.state, "service_manager"):
+            if hasattr(app.state, "application_services"):
                 try:
                     maybe_awaitable = _record(
                         app,

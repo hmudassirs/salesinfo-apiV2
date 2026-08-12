@@ -1,7 +1,7 @@
 """Request logging, distributed tracing, audit trail, and pool/app
 metrics instrumentation.
 
-Renamed from the generic-sounding pieces of core/services/service_manager.py
+Renamed from the generic-sounding pieces of core/services/application_services.py
 (LoggingService/TracingService/AuditService) to their actual roles, and
 given distinct names from core.db.cache/core.db.tracing's unrelated
 in-process utilities that happened to share the words "cache"/"tracing".

@@ -46,7 +46,7 @@ def build_request_context(request: Any) -> Dict[str, Any]:
 
 
 def emit_request_observability(
-    service_manager: Any,
+    application_services: Any,
     request: Any,
     status_code: int = 200,
     duration_ms: Optional[float] = None,
@@ -129,27 +129,27 @@ def emit_request_observability(
         ),
     }
 
-    write_queue = getattr(service_manager, "observability_queue", None)
+    write_queue = getattr(application_services, "observability_queue", None)
     if write_queue is not None:
         # Fast path: hand off to the background flush thread and return
-        # immediately. This is the whole point — no service-database
+        # immediately. This is the whole point — no application-state-store
         # write, no pool checkout, in the request path at all.
         write_queue.enqueue(record)
         return
 
     # Fallback for setups without a queue wired in (e.g. simpler test
-    # doubles for service_manager): write synchronously, still batched
+    # doubles for application_services): write synchronously, still batched
     # into one transaction per request as before queuing was added.
-    service_db = getattr(service_manager, "service_db", None)
-    if service_db is not None:
-        with service_db.transaction() as adapter:
-            write_observability_record(service_manager, adapter, record)
+    application_state = getattr(application_services, "application_state", None)
+    if application_state is not None:
+        with application_state.transaction() as adapter:
+            write_observability_record(application_services, adapter, record)
     else:
-        write_observability_record(service_manager, None, record)
+        write_observability_record(application_services, None, record)
 
 
 def write_observability_record(
-    service_manager: Any, adapter: Any, record: Dict[str, Any]
+    application_services: Any, adapter: Any, record: Dict[str, Any]
 ) -> None:
     """Perform the actual log/trace/audit writes for one record.
 
@@ -160,7 +160,7 @@ def write_observability_record(
     of writes happen under one write-lock acquisition instead of one
     each.
     """
-    service_manager.logging.log_request(**record["log"], _adapter=adapter)
-    service_manager.tracing.start_trace(**record["trace_start"], _adapter=adapter)
-    service_manager.tracing.end_trace(**record["trace_end"], _adapter=adapter)
-    service_manager.audit.log_audit_event(**record["audit"], _adapter=adapter)
+    application_services.logging.log_request(**record["log"], _adapter=adapter)
+    application_services.tracing.start_trace(**record["trace_start"], _adapter=adapter)
+    application_services.tracing.end_trace(**record["trace_end"], _adapter=adapter)
+    application_services.audit.log_audit_event(**record["audit"], _adapter=adapter)

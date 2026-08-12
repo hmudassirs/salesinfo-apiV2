@@ -1,7 +1,7 @@
 """Auth-specific FastAPI dependency.
 
 Extracted from core/app/api/dependencies.py, which mixed this
-auth-specific dependency in with generic DI (GetDB, GetServiceManager,
+auth-specific dependency in with generic DI (GetDB, GetApplicationServices,
 GetSettings). CurrentUser belongs with the rest of auth/, not with
 generic app wiring.
 """

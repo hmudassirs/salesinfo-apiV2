@@ -2,7 +2,7 @@
 
 Batching 4 writes into 1 transaction per request (see
 core/observability/context.py) cut the *overhead per write*, but each
-request still needed its own round trip through the service database's
+request still needed its own round trip through the application state store's
 connection pool -- under N concurrent requests, that's N separate pool
 checkouts and N separate commits purely for logging/tracing/audit, all
 competing with everything else for a pooled connection and adding their
@@ -14,11 +14,11 @@ This queue removes the write from the request path entirely: producers
 no I/O — and a single background thread drains the queue periodically,
 writing many requests' worth of records in ONE transaction. Response
 latency stops being coupled to how many *other* requests also need to
-log something, and to how busy the service-database pool happens to be.
+log something, and to how busy the application-state pool happens to be.
 
 Trade-off, stated plainly: if the process dies with records still
 queued, those log/trace/audit entries are lost. For request
-logging/tracing/audit — not the actual data warehouse — that's normally
+logging/tracing/audit — not the actual application data — that's normally
 an acceptable trade for the latency win. Reconsider if you need these
 records durable synchronously with the response (e.g. audit entries
 required for compliance before an action is considered "complete" —
@@ -42,14 +42,14 @@ class ObservabilityWriteQueue:
 
     def __init__(
         self,
-        service_db,
+        application_state,
         write_record: Callable[[Any, Dict[str, Any]], None],
         flush_interval: float = 0.2,
         max_batch: int = 200,
     ):
         """
         Args:
-            service_db: ServiceDatabase instance (for .transaction()).
+            application_state: ApplicationStateStore instance (for .transaction()).
             write_record: Callable(adapter, record) -> None, run once
                 per queued record inside the shared transaction. See
                 core/observability/context.py's _write_observability_record.
@@ -57,7 +57,7 @@ class ObservabilityWriteQueue:
             max_batch: Cap per flush, so one huge burst doesn't hold the
                 write lock for an unbounded amount of time in one go.
         """
-        self._service_db = service_db
+        self._application_state = application_state
         self._write_record = write_record
         self._flush_interval = flush_interval
         self._max_batch = max_batch
@@ -118,7 +118,7 @@ class ObservabilityWriteQueue:
         if not batch:
             return
         try:
-            with self._service_db.transaction() as adapter:
+            with self._application_state.transaction() as adapter:
                 for record in batch:
                     try:
                         self._write_record(adapter, record)

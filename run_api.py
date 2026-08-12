@@ -10,9 +10,9 @@ main()) specifically so this can be launched via `uvicorn run_api:app`
 -- which is what uvicorn's own `--workers N` / multi-process launcher
 requires, since it needs to import `app` fresh in each worker process.
 
-One PostgreSQL database backs everything -- the data warehouse and the
-service database (users, API keys, logs, traces, query cache L2, audit
-log; see core/storage/service_db.py's module docstring for why this
+One PostgreSQL database backs everything -- the application data store and the
+application state store (users, API keys, logs, traces, query cache L2, audit
+log; see core/storage/application_state_store.py's module docstring for why this
 isn't a per-subsystem choice). Configure it with `DATABASE_URL`, or the
 discrete `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD`/
 `PGSSLMODE` vars. Being one real database (not an embedded, on-disk,
@@ -64,15 +64,16 @@ from core.db.settings import PoolSettings
 # `asyncio.get_running_loop().set_default_executor(...)` and route every
 # blocking call in the process through it via `asyncio.to_thread`. That
 # fixed the immediate "only 32 threads for everything" ceiling, but still
-# left warehouse queries, service-db calls (auth, query cache), and
+# left application data queries, state-store calls (auth, query cache), and
 # fire-and-forget background writes all competing for the same pool of
-# threads -- a burst of slow warehouse queries could still starve
+# threads -- a burst of slow application data queries could still starve
 # API-key validation, purely because they share a thread pool that has
 # nothing to do with either workload (roadmap rule #5: no one oversized
 # global thread pool for unrelated workloads).
 #
 # `configure_executors()` (core/concurrency/executors.py) replaces this
-# with three separate bounded pools -- db / service / background -- each
+# with three separate bounded pools -- application data / application
+# state / background -- each
 # sized to the connection pool it actually fronts, so one workload's
 # load can't starve the others' threads. A small default executor is
 # still set for the handful of one-off startup/shutdown calls
@@ -105,8 +106,8 @@ print(
     f"sizes from that (override with env vars to pin explicit values)"
 )
 
-pool_min = int(os.getenv("DB_POOL_MIN_SIZE", str(sizing.db_pool_min)))
-pool_max = int(os.getenv("DB_POOL_MAX_SIZE", str(sizing.db_pool_max)))
+pool_min = int(os.getenv("APPLICATION_DATA_POOL_MIN_SIZE", str(sizing.application_data_pool_min)))
+pool_max = int(os.getenv("APPLICATION_DATA_POOL_MAX_SIZE", str(sizing.application_data_pool_max)))
 pool_config = PoolSettings(min_size=pool_min, max_size=pool_max, timeout=30)
 db_settings = DatabaseSettings(pool=pool_config)
 
@@ -121,24 +122,24 @@ db_config = DatabaseConfig.from_postgresql(
     settings=db_settings,
 )
 print(f"🐘 Database: PostgreSQL ({db_config.connection_string})")
-print("🗄️  Warehouse and service tables (users, API keys, logs, traces, cache, audit) share this one database")
+print("🗄️  Application data and application state tables (users, API keys, logs, traces, cache, audit) share this one database")
 
-service_pool_min = int(
-    os.getenv("SERVICE_DB_POOL_MIN_SIZE", str(sizing.service_pool_min))
+state_pool_min = int(
+    os.getenv("APPLICATION_STATE_POOL_MIN_SIZE", str(sizing.state_pool_min))
 )
-service_pool_max = int(
-    os.getenv("SERVICE_DB_POOL_MAX_SIZE", str(sizing.service_pool_max))
+state_pool_max = int(
+    os.getenv("APPLICATION_STATE_POOL_MAX_SIZE", str(sizing.state_pool_max))
 )
 
-# Size the DB/service executors off the *actual* pool configuration
+# Size the DB/state executors off the *actual* pool configuration
 # above, plus a little headroom for in-flight reservation
 # bookkeeping -- there's no benefit to more worker threads than
-# there are connections for them to use. `service_workers` covers
-# ServiceDatabase's own pool (see core/storage/service_db.py).
+# there are connections for them to use. `state_workers` covers
+# ApplicationStateStore's own pool (see core/storage/application_state_store.py).
 configure_executors(
-    db_workers=int(os.getenv("DB_EXECUTOR_WORKERS", str(pool_max + 2))),
-    service_workers=int(
-        os.getenv("SERVICE_EXECUTOR_WORKERS", str(service_pool_max + 2))
+    application_data_workers=int(os.getenv("APPLICATION_DATA_EXECUTOR_WORKERS", str(pool_max + 2))),
+    state_workers=int(
+        os.getenv("APPLICATION_STATE_EXECUTOR_WORKERS", str(state_pool_max + 2))
     ),
     background_workers=int(
         os.getenv(
@@ -152,8 +153,8 @@ configure_executors(
 lifespan_mgr = ApplicationLifespan(
     db_config,
     mode="async",
-    service_pool_min_size=service_pool_min,
-    service_pool_max_size=service_pool_max,
+    state_pool_min_size=state_pool_min,
+    state_pool_max_size=state_pool_max,
 )
 
 # This runner is async-only: every route in core/app/api/routes.py is
@@ -184,13 +185,13 @@ async def lifespan(app: FastAPI):
     db_session = lifespan_mgr.get_db_session()
     app.state.db_session = db_session
 
-    # Service manager was built by ApplicationLifespan's
-    # ServiceDatabaseStep during startup_async() above — reuse it
+    # Application services were built by ApplicationLifespan's
+    # ApplicationStateStep during startup_async() above — reuse them
     # rather than constructing a second connection. Note
-    # ServiceDatabaseStep.startup_async() still runs its (blocking)
+    # ApplicationStateStep.startup_async() still runs its (blocking)
     # psycopg2 setup via asyncio.to_thread internally, so this is
     # safe to call from an async context.
-    app.state.service_manager = lifespan_mgr.get_service_manager()
+    app.state.application_services = lifespan_mgr.get_application_services()
     app.state.container = lifespan_mgr.get_container()
 
     if db_session and db_session._async_pool:

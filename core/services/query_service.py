@@ -1,6 +1,6 @@
 """Orchestrates a single `/api/query` request: authorization, cost
 classification/concurrency gating, cache lookup (L1 -> single-flight ->
-L2), warehouse execution, result-limit enforcement, and cache
+L2), application data execution, result-limit enforcement, and cache
 invalidation on writes.
 
 Pulled out of the route handler (roadmap P0-9: "routes should be thin
@@ -53,7 +53,7 @@ class QueryService:
     ):
         """
         Args:
-            db_session: warehouse connection session.
+            db_session: application data connection session.
             cache_coordinator: L1/L2 query result cache.
             require_write_scope: gate write statements behind the
                 caller's "write" scope (AppSettings.require_write_scope_for_mutations).
@@ -64,7 +64,7 @@ class QueryService:
                 tables a write statement touched (AppSettings.cache_invalidation_precise)
                 instead of always clearing the whole cache.
         """
-        self._db = db_session
+        self._db_session = db_session
         self._cache = cache_coordinator
         self._require_write_scope = require_write_scope
         self._precise_cache_invalidation = precise_cache_invalidation
@@ -164,7 +164,7 @@ class QueryService:
                 ) from exc
 
     async def _execute(self, sql: str, params: tuple) -> list:
-        async with self._db.get_async_session() as db:
+        async with self._db_session.get_async_session() as db:
             return await db.fetch_all(sql, params)
 
 

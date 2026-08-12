@@ -8,7 +8,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from core.db.logger import get_logger
-from core.storage.service_db import ServiceDatabase
+from core.storage.application_state_store import ApplicationStateStore
 
 logger = get_logger(__name__)
 
@@ -34,13 +34,13 @@ def _json_default(value: Any) -> Any:
 class QueryResultCache:
     """Service for caching query results."""
 
-    def __init__(self, service_db: ServiceDatabase):
+    def __init__(self, application_state: ApplicationStateStore):
         """Initialize query cache service.
 
         Args:
-            service_db: Service database instance
+            application_state: Application state store instance
         """
-        self.service_db = service_db
+        self.application_state = application_state
 
     def generate_cache_key(self, query_sql: str, params: tuple = ()) -> str:
         """Generate a cache key for a query.
@@ -82,7 +82,7 @@ class QueryResultCache:
         """
 
         try:
-            result = self.service_db.fetch_one(sql, (cache_key, current_time))
+            result = self.application_state.fetch_one(sql, (cache_key, current_time))
             return dict(result) if result else None
         except Exception as e:
             logger.error(f"Failed to get cached result: {e}")
@@ -95,7 +95,7 @@ class QueryResultCache:
         that method's docstring."""
         try:
             current_time = int(time.time())
-            self.service_db.execute(
+            self.application_state.execute(
                 "UPDATE query_cache SET last_accessed_at = ?, access_count = access_count + 1 WHERE cache_key = ?",
                 (current_time, cache_key),
             )
@@ -141,8 +141,8 @@ class QueryResultCache:
 
         # ON CONFLICT ... DO UPDATE (not SQLite's `INSERT OR REPLACE`,
         # which PostgreSQL doesn't have) so this upsert works unmodified
-        # against either service-database backend -- see
-        # core.storage.service_db's module docstring. Supported by
+        # against either application-state-store backend -- see
+        # core.storage.application_state_store's module docstring. Supported by
         # SQLite since 3.24 (2018) and PostgreSQL since 9.5.
         sql = """
         INSERT INTO query_cache (
@@ -163,7 +163,7 @@ class QueryResultCache:
         """
 
         try:
-            self.service_db.execute(
+            self.application_state.execute(
                 sql,
                 (
                     cache_key,
@@ -197,7 +197,7 @@ class QueryResultCache:
         stale data after mutations" -- correctness over precision).
         """
         try:
-            result = self.service_db.execute("DELETE FROM query_cache", ())
+            result = self.application_state.execute("DELETE FROM query_cache", ())
             deleted_count = result.rowcount
             logger.info(f"Cleared entire query cache ({deleted_count} entries) after a write statement")
             return deleted_count
@@ -234,7 +234,7 @@ class QueryResultCache:
         sql = f"DELETE FROM query_cache WHERE {where_clause}"
 
         try:
-            result = self.service_db.execute(sql, tuple(params))
+            result = self.application_state.execute(sql, tuple(params))
             deleted_count = result.rowcount
             logger.info(f"Invalidated {deleted_count} cache entries")
             return deleted_count
@@ -250,25 +250,25 @@ class QueryResultCache:
         """
         try:
             # Total entries
-            total_result = self.service_db.fetch_one("SELECT COUNT(*) FROM query_cache")
+            total_result = self.application_state.fetch_one("SELECT COUNT(*) FROM query_cache")
             total_entries = total_result[0] if total_result else 0
 
             # Active entries (not expired)
             current_time = int(time.time())
-            active_result = self.service_db.fetch_one(
+            active_result = self.application_state.fetch_one(
                 "SELECT COUNT(*) FROM query_cache WHERE expires_at IS NULL OR expires_at > ?",
                 (current_time,),
             )
             active_entries = active_result[0] if active_result else 0
 
             # Total size
-            size_result = self.service_db.fetch_one(
+            size_result = self.application_state.fetch_one(
                 "SELECT SUM(result_size_bytes) FROM query_cache"
             )
             total_size = size_result[0] if size_result else 0
 
             # Hit statistics
-            hit_result = self.service_db.fetch_one(
+            hit_result = self.application_state.fetch_one(
                 "SELECT SUM(access_count) FROM query_cache"
             )
             total_hits = hit_result[0] if hit_result else 0

@@ -10,7 +10,7 @@ to grant admin is `PATCH /api/auth/users/{user_id}/role` — which itself
 requires an existing admin's API key. That's correct for every user
 *after* the first, but it leaves a chicken-and-egg problem for the very
 first admin the system ever has. This script is the deliberate, narrow
-escape hatch: it talks to the service database directly, run by whoever
+escape hatch: it talks to the application state store directly, run by whoever
 has shell/deploy access to the box — not by anyone over the network.
 
 There is a second, easy-to-miss chicken-and-egg problem underneath the
@@ -76,18 +76,20 @@ from typing import Optional
 # the current working directory or how the script was launched.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from core.auth.api_key_repository import APIKeyRepository
 from core.auth.api_key_service import APIKeyService
 from core.auth.models import UserCreate
 from core.auth.passwords import hash_password
+from core.auth.user_repository import UserRepository
 from core.db.config import DatabaseConfig
-from core.service_registry import ServiceManager
-from core.storage.service_db import ServiceDatabase
+from core.storage.application_state_store import ApplicationStateStore
+from core.storage.schema import ApplicationStateSchema
 
 
-def _build_service_db() -> ServiceDatabase:
+def _build_application_state() -> ApplicationStateStore:
     """Same PostgreSQL connection setup as run_api.py's module-level
-    setup (see its docstring): one database backs both the warehouse
-    and the service tables. Kept in sync by hand with run_api.py rather
+    setup (see its docstring): one database backs both the application
+    data and the application state tables. Kept in sync by hand with run_api.py rather
     than sharing a helper, since this script's only other dependency on
     that module would be its unrelated FastAPI app wiring.
     """
@@ -100,8 +102,8 @@ def _build_service_db() -> ServiceDatabase:
         password=os.getenv("PGPASSWORD", "postgres"),
         sslmode=os.getenv("PGSSLMODE"),
     )
-    print(f"Service database: PostgreSQL ({db_config.connection_string})")
-    return ServiceDatabase.for_postgres(**db_config.extra_options)
+    print(f"Application state store: PostgreSQL ({db_config.connection_string})")
+    return ApplicationStateStore.for_postgres(**db_config.extra_options)
 
 
 def _read_password(cli_password: Optional[str]) -> str:
@@ -177,9 +179,10 @@ def main() -> None:
         print(f"Error: invalid input: {e}", file=sys.stderr)
         sys.exit(1)
 
-    service_db = _build_service_db()
-    service_db.connect()
-    service_db.create_tables()
+    application_state = _build_application_state()
+    application_state.connect()
+    ApplicationStateSchema(application_state).create()
+    user_repo = UserRepository(application_state)
 
     def issue_api_key(owner_id: str) -> None:
         """Mint an API key the same way the HTTP API would, and print it once.
@@ -193,8 +196,7 @@ def main() -> None:
         if args.skip_api_key:
             return
 
-        service_manager = ServiceManager(service_db)
-        api_key_service = APIKeyService(service_manager)
+        api_key_service = APIKeyService(APIKeyRepository(application_state))
         result = asyncio.run(
             api_key_service.create_api_key(owner_id=owner_id, scopes=args.scopes)
         )
@@ -212,7 +214,7 @@ def main() -> None:
         print()
 
     try:
-        existing = service_db.get_user_by_username(validated.username)
+        existing = user_repo.get_by_username(validated.username)
 
         if existing:
             if not args.promote_existing:
@@ -224,7 +226,7 @@ def main() -> None:
                 )
                 sys.exit(1)
 
-            success = service_db.update_user_role(existing["user_id"], "admin")
+            success = user_repo.update_role(existing["user_id"], "admin")
             if not success:
                 print("Error: failed to update role.", file=sys.stderr)
                 sys.exit(1)
@@ -239,7 +241,7 @@ def main() -> None:
         user_id = f"user_{int(time.time())}_{secrets.token_hex(4)}"
         password_hash = hash_password(validated.password)
 
-        success = service_db.create_user(
+        success = user_repo.create(
             user_id=user_id,
             username=validated.username,
             email=validated.email,
@@ -253,7 +255,7 @@ def main() -> None:
         print(f"Created admin user '{validated.username}' (user_id={user_id}).")
         issue_api_key(user_id)
     finally:
-        service_db.disconnect()
+        application_state.disconnect()
 
 
 if __name__ == "__main__":

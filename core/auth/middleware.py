@@ -9,7 +9,7 @@ records what happened after.
 
 import asyncio
 
-from core.concurrency.executors import run_in_service_executor
+from core.concurrency.executors import run_in_state_executor
 from core.performance.adapters.auth import InstrumentedAPIKeyService, instrumented_jwt_decode
 from core.performance.context import get_current_profiler
 from core.performance.enums import PerformanceStage
@@ -25,7 +25,7 @@ from core.auth.shared_state import get_auth_state
 
 # Per-process, short-TTL cache of user records: user_id -> (user_dict,
 # expires_at_monotonic). Every authenticated request was doing a fresh
-# service-database read here even when the API key itself was already
+# application-state-store read here even when the API key itself was already
 # cached — same trade-off as APIKeyService's validation cache: a role
 # change or deactivation can take up to this long to take effect for a
 # user already mid-session. routes/auth.py calls invalidate_user_cache()
@@ -106,7 +106,7 @@ def _cache_user(user_id: str, user: dict) -> None:
     _USER_CACHE[user_id] = (user, time.monotonic() + _USER_CACHE_TTL_SECONDS)
 
 
-async def _get_user_with_single_flight(owner_id: str, service_manager) -> dict | None:
+async def _get_user_with_single_flight(owner_id: str, application_services) -> dict | None:
     user = _get_cached_user(owner_id)
     if user is not None:
         return user
@@ -137,12 +137,12 @@ async def _get_user_with_single_flight(owner_id: str, service_manager) -> dict |
                 PerformanceStage.AUTHENTICATION,
                 MetricName("user_lookup"),
             ):
-                user = await run_in_service_executor(
-                    service_manager.users.get_by_id, owner_id
+                user = await run_in_state_executor(
+                    application_services.users.get_by_id, owner_id
                 )
         else:
-            user = await run_in_service_executor(
-                service_manager.users.get_by_id, owner_id
+            user = await run_in_state_executor(
+                application_services.users.get_by_id, owner_id
             )
         if user:
             _cache_user(owner_id, user)
@@ -214,8 +214,8 @@ def install_auth_middleware(app: FastAPI) -> None:
                 auth_header.replace("Bearer ", "", 1).strip() if auth_header else ""
             )
 
-            service_manager = getattr(app.state, "service_manager", None)
-            if service_manager is None:
+            application_services = getattr(app.state, "application_services", None)
+            if application_services is None:
                 response = Response(status_code=HTTP_401_UNAUTHORIZED)
                 response.headers["www-authenticate"] = "Bearer"
                 return response
@@ -224,7 +224,9 @@ def install_auth_middleware(app: FastAPI) -> None:
 
             # 1) An explicit x-api-key is the normal, long-lived credential
             # for machine/service callers.
-            api_key_service = InstrumentedAPIKeyService(APIKeyService(service_manager))
+            api_key_service = InstrumentedAPIKeyService(
+                APIKeyService(application_services.api_keys)
+            )
             if raw_api_key:
                 validated_key = await api_key_service.validate_api_key(raw_api_key)
             else:
@@ -244,8 +246,8 @@ def install_auth_middleware(app: FastAPI) -> None:
                     request.headers.get("x-session-id", "") or "api-key"
                 )
 
-                if owner_id and hasattr(service_manager, "users"):
-                    user = await _get_user_with_single_flight(owner_id, service_manager)
+                if owner_id and hasattr(application_services, "users"):
+                    user = await _get_user_with_single_flight(owner_id, application_services)
                     if user:
                         request.state.username = user.get("username", "")
                         roles_val = user.get("roles") or user.get("role") or ""
@@ -262,7 +264,7 @@ def install_auth_middleware(app: FastAPI) -> None:
             # *any* request — including POST /api/auth/keys, the endpoint
             # that mints their first x-api-key. The JWT is self-contained
             # (signed with settings.jwt_secret_key), so this doesn't need a
-            # service_manager lookup the way the api-key path does; the
+            # application_services lookup the way the api-key path does; the
             # trade-off is that it's valid for anything under /api, not just
             # key creation, until it expires (settings.jwt_expiry_seconds).
             if not authenticated and bearer_token:
@@ -327,9 +329,9 @@ def install_auth_middleware(app: FastAPI) -> None:
                             request.headers.get("x-session-id", "") or "api-key"
                         )
 
-                        if owner_id and hasattr(service_manager, "users"):
+                        if owner_id and hasattr(application_services, "users"):
                             user = await _get_user_with_single_flight(
-                                owner_id, service_manager
+                                owner_id, application_services
                             )
                             if user:
                                 request.state.username = user.get("username", "")

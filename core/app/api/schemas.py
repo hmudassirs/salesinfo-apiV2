@@ -75,8 +75,8 @@ class HealthResponse(BaseModel):
     executor_metrics: Optional[dict] = Field(
         None,
         description=(
-            "Per-executor (db/service/background) active-worker and "
-            "approx-queue-depth counts -- roadmap P0-1"
+            "Per-executor (application-data/application-state/background) "
+            "active-worker and approx-queue-depth counts -- roadmap P0-1"
         ),
     )
     query_concurrency_metrics: Optional[dict] = Field(

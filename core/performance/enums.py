@@ -22,7 +22,7 @@ class PerformanceStage(Enum):
     POOL_WAIT = auto()
     POOL_ACQUIRE = auto()
     POOL_RELEASE = auto()
-    DB_EXECUTOR_WAIT = auto()
+    APPLICATION_DATA_EXECUTOR_WAIT = auto()
     TRANSACTION_BEGIN = auto()
     TRANSACTION_COMMIT = auto()
     TRANSACTION_ROLLBACK = auto()

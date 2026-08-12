@@ -15,18 +15,18 @@ just the one that produced them:
      different worker processes should still be caught, not get a
      fresh allowance on each one.
 
-`PostgresAuthState` uses two small tables in the application's one
-PostgreSQL database (see `core.storage.service_db`'s module docstring)
+`PersistentAuthState` uses two small tables in the application's one
+PostgreSQL database (see `core.storage.application_state_store`'s module docstring)
 as the shared coordination point -- no new infrastructure dependency
 (Redis, etc.) beyond what a multi-worker deployment already requires
 for the database itself. Table names are prefixed `_app_` and
-documented as internal control-plane state, not warehouse business
+documented as internal control-plane state, not application data store business
 data, since they live in the same database as the customer's tables.
 
 Deliberately NOT extended to `core.auth.middleware._USER_CACHE` (the
 per-request user-record cache) or the query result cache's L1 layer:
 both are short-TTL (30s / configurable) local caches sitting in front
-of an already-shared source of truth (the service database, and the L2
+of an already-shared source of truth (the application state store, and the L2
 query cache respectively), so they self-heal within their TTL on every
 process regardless of instance count -- the same "local cache in front
 of a shared store" pattern used by plenty of production systems. JWT
@@ -46,7 +46,7 @@ logger = get_logger(__name__)
 
 
 class AuthSharedState(Protocol):
-    """Interface `PostgresAuthState` satisfies. Callers (middleware.py,
+    """Interface `PersistentAuthState` satisfies. Callers (middleware.py,
     rate_limiter.py) go through `get_auth_state()` below and never
     construct it directly."""
 
@@ -79,7 +79,7 @@ _REVOCATIONS_TABLE = "_app_jwt_revocations"
 _RATE_LIMIT_TABLE = "_app_rate_limit_windows"
 
 _CREATE_TABLES_SQL = (
-    # Kept in sync with migrations/warehouse_postgres/0001_auth_shared_state.sql
+    # Kept in sync with migrations/postgresql/0001_auth_shared_state.sql
     # by hand -- this copy exists only for _ensure_tables()'s defensive
     # fallback (see its docstring), not as the source of truth for the
     # schema. A future column/index change belongs in a new numbered
@@ -100,21 +100,21 @@ _CREATE_TABLES_SQL = (
 )
 
 
-class PostgresAuthState:
+class PersistentAuthState:
     """Postgres-backed implementation -- shared across every worker
-    process and instance connected to the same warehouse. See this
-    module's docstring for why this piggybacks on the warehouse
-    connection instead of adding a new dependency like Redis.
+    process and instance connected to the same application data store. See this
+    module's docstring for why this piggybacks on the application data
+    store's connection instead of adding a new dependency like Redis.
 
     `?`-style placeholders are used throughout (translated to `%s` by
     `core.db.adapters.postgresql.translate_qmark_placeholders`, same
     as every other query in this codebase, including the service
-    database's tables -- see `core.storage.service_db`) so this reads
+    database's tables -- see `core.storage.application_state_store`) so this reads
     like the rest of the SQL here, not like Postgres-specific code.
     """
 
     def __init__(self, db_session, *, revocation_cache_ttl_seconds: float = 10.0) -> None:
-        self._db = db_session
+        self._db_session = db_session
         self._tables_ready = False
         # Local read-through cache in front of get_revoked_before(),
         # same pattern as core.auth.middleware._USER_CACHE: paying a
@@ -130,10 +130,10 @@ class PostgresAuthState:
 
     async def _ensure_tables(self) -> None:
         """Defensive fallback only. The real schema-management path is
-        migrations/warehouse_postgres/ (core.db.migrations), applied
-        once at startup by DataWarehouseStep before any request is
+        migrations/postgresql/ (core.db.migrations), applied
+        once at startup by ApplicationDataStep before any request is
         served -- see core/app/lifespan.py. This just guards against
-        PostgresAuthState ever being constructed outside that startup
+        PersistentAuthState ever being constructed outside that startup
         path (a script, a test, a future caller) without failing on a
         missing table; CREATE TABLE IF NOT EXISTS is cheap and
         idempotent, so paying for it once per process here costs
@@ -141,7 +141,7 @@ class PostgresAuthState:
         """
         if self._tables_ready:
             return
-        async with self._db.get_async_session() as session:
+        async with self._db_session.get_async_session() as session:
             for statement in _CREATE_TABLES_SQL:
                 await session.execute(statement)
         self._tables_ready = True
@@ -155,7 +155,7 @@ class PostgresAuthState:
             del self._revocation_cache[user_id]
 
         await self._ensure_tables()
-        async with self._db.get_async_session() as session:
+        async with self._db_session.get_async_session() as session:
             row = await session.fetch_one(
                 f"SELECT revoked_at FROM {_REVOCATIONS_TABLE} WHERE user_id = ?",
                 (user_id,),
@@ -169,7 +169,7 @@ class PostgresAuthState:
 
     async def set_revoked_before(self, user_id: str, at: float) -> None:
         await self._ensure_tables()
-        async with self._db.get_async_session() as session:
+        async with self._db_session.get_async_session() as session:
             await session.execute(
                 f"""
                 INSERT INTO {_REVOCATIONS_TABLE} (user_id, revoked_at)
@@ -202,7 +202,7 @@ class PostgresAuthState:
         # race-free across concurrent workers -- an app-level
         # "SELECT then INSERT/UPDATE" would have a check-then-act gap
         # two processes could both slip through at once.
-        async with self._db.get_async_session() as session:
+        async with self._db_session.get_async_session() as session:
             row = await session.fetch_one(
                 f"""
                 INSERT INTO {_RATE_LIMIT_TABLE} (rate_key, window_start, attempt_count)
@@ -225,7 +225,7 @@ class PostgresAuthState:
 
     async def reset_attempts(self, key: str) -> None:
         await self._ensure_tables()
-        async with self._db.get_async_session() as session:
+        async with self._db_session.get_async_session() as session:
             await session.execute(
                 f"DELETE FROM {_RATE_LIMIT_TABLE} WHERE rate_key = ?", (key,)
             )
@@ -242,7 +242,7 @@ def get_auth_state(db_session) -> AuthSharedState:
     Args:
         db_session: the app's `DatabaseSession` -- required. There's
             one backend (PostgreSQL; see `core.db.config.DatabaseConfig`'s
-            module docstring), so this is always `PostgresAuthState(db_session)`.
+            module docstring), so this is always `PersistentAuthState(db_session)`.
     """
     global _shared_state
     if _shared_state is not None:
@@ -256,7 +256,7 @@ def get_auth_state(db_session) -> AuthSharedState:
         )
 
     logger.info("Auth shared state: PostgreSQL-backed (cross-process/instance)")
-    _shared_state = PostgresAuthState(db_session)
+    _shared_state = PersistentAuthState(db_session)
     return _shared_state
 
 

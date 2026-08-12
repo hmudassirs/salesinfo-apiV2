@@ -260,7 +260,7 @@ async def run_smoke_tests(
     except Exception as e:
         results.append(CheckResult("GET /api/health", False, str(e)))
 
-    # --- query: core/app/api/routes/query.py + warehouse pool ---
+    # --- query: core/app/api/routes/query.py + data pool ---
     try:
         r = await client.post(
             f"{base_url}/api/query",

@@ -6,6 +6,6 @@ core/services/ to make that scope explicit; "services" told you nothing
 about what was inside.
 """
 
-from core.storage.service_db import ExecuteResult, ServiceDatabase
+from core.storage.application_state_store import ExecuteResult, ApplicationStateStore
 
-__all__ = ["ServiceDatabase", "ExecuteResult"]
+__all__ = ["ApplicationStateStore", "ExecuteResult"]

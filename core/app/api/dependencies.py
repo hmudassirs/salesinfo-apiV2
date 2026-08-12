@@ -1,7 +1,8 @@
 """FastAPI `Depends(...)` callables for use directly in route signatures.
 
-Distinct from `core.app.container.DependencyContainer` (the long-lived
-service registry populated at startup by `lifespan.py`). This module
+Distinct from `core.app.container.ApplicationContainer` (the typed,
+long-lived object holder populated at startup by
+`core.app.lifecycle.manager.ApplicationLifespan`). This module
 adapts values out of that container/app.state into per-request
 dependencies that routes can declare with `Depends(...)`.
 
@@ -19,13 +20,13 @@ from core.db.session import DatabaseSession
 
 __all__ = [
     "GetDB",
-    "GetServiceManager",
+    "GetApplicationServices",
     "GetSettings",
     "CurrentUser",
     "GetCurrentUser",
     "get_current_user",
     "get_db_session",
-    "get_service_manager",
+    "get_application_services",
     "get_settings",
 ]
 
@@ -40,7 +41,7 @@ async def get_db_session(request: Request) -> AsyncGenerator[DatabaseSession, No
         DatabaseSession instance
 
     Raises:
-        HTTPException: 503 if the data warehouse step never started
+        HTTPException: 503 if the application data store step never started
             (e.g. no db_config was provided at startup).
     """
     db_session: Optional[DatabaseSession] = getattr(
@@ -53,24 +54,24 @@ async def get_db_session(request: Request) -> AsyncGenerator[DatabaseSession, No
     yield db_session
 
 
-def get_service_manager(request: Request):
-    """Provide the ServiceManager (auth, caching, logging, tracing, audit).
+def get_application_services(request: Request):
+    """Provide the ApplicationServices (auth, caching, logging, tracing, audit).
 
     Args:
         request: FastAPI request object
 
     Returns:
-        ServiceManager instance
+        ApplicationServices instance
 
     Raises:
-        HTTPException: 503 if the service database step never started.
+        HTTPException: 503 if the application state step never started.
     """
-    service_manager = getattr(request.app.state, "service_manager", None)
-    if not service_manager:
+    application_services = getattr(request.app.state, "application_services", None)
+    if not application_services:
         raise HTTPException(
-            status_code=503, detail="Service manager is not configured or unavailable"
+            status_code=503, detail="Application services are not configured or unavailable"
         )
-    return service_manager
+    return application_services
 
 
 def get_settings(request: Request):
@@ -90,5 +91,5 @@ def get_settings(request: Request):
 
 # Create dependency callables for endpoints
 GetDB = Depends(get_db_session)
-GetServiceManager = Depends(get_service_manager)
+GetApplicationServices = Depends(get_application_services)
 GetSettings = Depends(get_settings)

@@ -12,9 +12,9 @@ class DatabaseType(str, Enum):
     """Supported database types.
 
     PostgreSQL only -- see `DatabaseConfig.from_postgresql`'s docstring
-    and `core.storage.service_db`'s module docstring for why this isn't
+    and `core.storage.application_state_store`'s module docstring for why this isn't
     a choice between backends: one PostgreSQL database serves both the
-    data warehouse and operational/service data.
+    application data and operational/service data.
     """
 
     POSTGRESQL = "postgresql"

@@ -30,8 +30,8 @@ class AppSettings:
     # --- Query execution policy (roadmap Phase 13.1) ---
     # This deployment is an intentional "authenticated DB console", not
     # a read-only reporting API: callers are expected to run DDL/DML
-    # against their own warehouse, and there's no per-row/per-tenant
-    # data to leak between callers (single shared warehouse, no RLS
+    # against their own application data store, and there's no per-row/per-tenant
+    # data to leak between callers (single shared application data store, no RLS
     # concept anywhere in this codebase -- see QueryCacheCoordinator's
     # docstring for the corresponding cache-isolation decision). Given
     # that, the policy chosen here is: SELECT/WITH require only the
