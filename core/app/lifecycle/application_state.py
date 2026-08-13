@@ -8,6 +8,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from core.app.lifecycle.base import LifecycleStep
+from core.app.settings import AppSettings
 from core.application_services import ApplicationServices
 from core.auth.admin_bootstrap import AdminBootstrapService
 from core.caching.cache_maintenance import CacheMaintenance
@@ -48,10 +49,16 @@ class ApplicationStateStep(LifecycleStep):
         self,
         db_config,
         *,
+        settings: Optional[AppSettings] = None,
         pool_min_size: int = 2,
         pool_max_size: int = 8,
     ):
         self.db_config = db_config
+        # Threaded through to ApplicationServices, which uses it to
+        # build authentication_service (JWT secret/algorithm/expiry).
+        # See ApplicationServices.__init__'s docstring for the
+        # AppSettings.from_env() fallback when this is left None.
+        self.settings = settings
         self.pool_min_size = pool_min_size
         self.pool_max_size = pool_max_size
         self.application_state: Optional[ApplicationStateStore] = None
@@ -77,7 +84,9 @@ class ApplicationStateStep(LifecycleStep):
         AdminBootstrapService(self.application_state).initialize()
         CacheMaintenance(self.application_state).cleanup_expired_cache()
 
-        self.application_services = ApplicationServices(self.application_state)
+        self.application_services = ApplicationServices(
+            self.application_state, settings=self.settings
+        )
 
         # Background flush queue for request logging/tracing/audit — see
         # core/observability/write_queue.py's docstring for why this
@@ -106,6 +115,8 @@ class ApplicationStateStep(LifecycleStep):
             "audit_trail": self.application_services.audit,
             "api_key_repository": self.application_services.api_keys,
             "user_repository": self.application_services.users,
+            "api_key_service": self.application_services.api_key_service,
+            "authentication_service": self.application_services.authentication_service,
         }
 
     async def startup_async(self) -> Dict[str, Any]:

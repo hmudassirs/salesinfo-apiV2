@@ -35,6 +35,7 @@ from core.app.lifecycle.base import LifecycleStep
 from core.app.lifecycle.executors import ExecutorsStep
 from core.app.lifecycle.performance import PerformanceStep
 from core.app.lifecycle.persistence import PersistenceQueueStep
+from core.app.settings import AppSettings
 from core.application_services import ApplicationServices
 from core.db.session import DatabaseSession
 
@@ -57,6 +58,7 @@ class ApplicationLifespan:
         mode: Literal["sync", "async"] = "sync",
         state_pool_min_size: Optional[int] = None,
         state_pool_max_size: Optional[int] = None,
+        settings: Optional[AppSettings] = None,
     ):
         """Initialize application lifespan.
 
@@ -74,6 +76,16 @@ class ApplicationLifespan:
                 count instead of a constant picked for one machine.
             state_pool_max_size: Application-state pool ceiling; same
                 default behavior as `state_pool_min_size`.
+            settings: AppSettings, threaded through to ApplicationStateStep
+                so ApplicationServices can build `authentication_service`
+                (JWT secret/algorithm/expiry) once at startup instead of
+                per-request -- see ApplicationServices.__init__'s
+                docstring. Falls back to `AppSettings.from_env()` when
+                not given, same as `core.app.api.app.create_app`. Pass
+                the *same* instance to both `ApplicationLifespan(...)`
+                and `create_app(settings=...)` (see run_api.py) so
+                there's one settings object for the whole process, not
+                two independently-parsed-from-env copies.
         """
         self.mode = mode
         self.container = ApplicationContainer()
@@ -124,6 +136,7 @@ class ApplicationLifespan:
             ExecutorsStep(),
             ApplicationStateStep(
                 db_config,
+                settings=settings,
                 pool_min_size=state_pool_min_size,
                 pool_max_size=state_pool_max_size,
             ),

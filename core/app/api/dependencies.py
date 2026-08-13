@@ -15,6 +15,8 @@ from typing import AsyncGenerator, Optional
 
 from fastapi import Depends, HTTPException, Request
 
+from core.auth.api_key_service import APIKeyService
+from core.auth.authentication_service import AuthenticationService
 from core.auth.dependencies import CurrentUser, GetCurrentUser, get_current_user
 from core.db.session import DatabaseSession
 
@@ -22,12 +24,16 @@ __all__ = [
     "GetDB",
     "GetApplicationServices",
     "GetSettings",
+    "GetAPIKeyService",
+    "GetAuthenticationService",
     "CurrentUser",
     "GetCurrentUser",
     "get_current_user",
     "get_db_session",
     "get_application_services",
     "get_settings",
+    "get_api_key_service",
+    "get_authentication_service",
 ]
 
 
@@ -93,3 +99,33 @@ def get_settings(request: Request):
 GetDB = Depends(get_db_session)
 GetApplicationServices = Depends(get_application_services)
 GetSettings = Depends(get_settings)
+
+
+def get_api_key_service(
+    application_services=Depends(get_application_services),
+) -> APIKeyService:
+    """Return the shared APIKeyService, built once at startup by
+    `ApplicationServices` (see its docstring) and reused across every
+    request -- not constructed here per-request. It's cheap enough
+    either way, but building it once means "what services exist and
+    what are they built from" has exactly one place to look, alongside
+    the repositories/services already listed on `ApplicationServices`.
+    """
+    return application_services.api_key_service
+
+
+GetAPIKeyService = Depends(get_api_key_service)
+
+
+def get_authentication_service(
+    application_services=Depends(get_application_services),
+) -> AuthenticationService:
+    """Return the shared AuthenticationService, built once at startup.
+    See `get_api_key_service`'s docstring for why this reads off
+    `application_services` instead of constructing a new instance per
+    request.
+    """
+    return application_services.authentication_service
+
+
+GetAuthenticationService = Depends(get_authentication_service)

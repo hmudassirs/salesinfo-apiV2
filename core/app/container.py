@@ -31,6 +31,8 @@ from typing import Any, Optional
 
 from core.application_services import ApplicationServices
 from core.auth.api_key_repository import APIKeyRepository
+from core.auth.api_key_service import APIKeyService
+from core.auth.authentication_service import AuthenticationService
 from core.auth.user_repository import UserRepository
 from core.caching.query_result_cache import QueryResultCache
 from core.db.session import DatabaseSession
@@ -61,6 +63,8 @@ class ApplicationContainer:
     audit_trail: Optional[AuditTrail] = None
     api_key_repository: Optional[APIKeyRepository] = None
     user_repository: Optional[UserRepository] = None
+    api_key_service: Optional[APIKeyService] = None
+    authentication_service: Optional[AuthenticationService] = None
     performance_registry: Optional[Any] = None
 
     def register(self, name: str, service: Any) -> None:
@@ -104,9 +108,3 @@ class ApplicationContainer:
         for f in fields(self):
             setattr(self, f.name, None)
         logger.info("Cleared all registered services")
-
-
-# Backward-compatible alias: existing imports of
-# `from core.app.container import DependencyContainer` keep working.
-# New code should use `ApplicationContainer` directly.
-DependencyContainer = ApplicationContainer

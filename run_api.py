@@ -54,6 +54,7 @@ from fastapi import FastAPI
 
 from core.app.api.app import create_app
 from core.app.lifespan import ApplicationLifespan
+from core.app.settings import AppSettings
 from core.concurrency.cpu import recommended_sizing
 from core.concurrency.executors import configure_executors
 from core.db.config import DatabaseConfig, DatabaseSettings
@@ -150,11 +151,20 @@ configure_executors(
 )
 
 # Create lifespan manager (async mode for pooled database access)
+#
+# One AppSettings instance for the whole process, built here and
+# threaded into both ApplicationLifespan (so ApplicationServices can
+# build authentication_service with the real JWT settings at startup
+# -- see ApplicationStateStep's docstring) and create_app() below --
+# rather than each independently calling AppSettings.from_env() and
+# ending up with two separately-parsed copies of the same environment.
+settings = AppSettings.from_env()
 lifespan_mgr = ApplicationLifespan(
     db_config,
     mode="async",
     state_pool_min_size=state_pool_min,
     state_pool_max_size=state_pool_max,
+    settings=settings,
 )
 
 # This runner is async-only: every route in core/app/api/routes.py is
@@ -220,6 +230,7 @@ async def lifespan(app: FastAPI):
 # (dev reload, or a process manager in front of it), including with
 # `--workers > 1` -- see this module's docstring.
 app = create_app(
+    settings=settings,
     title="PrepareData API",
     version="1.0.0",
     description="Database preparation and management API",

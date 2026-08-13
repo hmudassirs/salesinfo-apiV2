@@ -17,21 +17,26 @@ from typing import Optional
 
 from core.auth.api_key_repository import APIKeyRepository
 from core.db.logger import get_logger
+from core.observability.audit import AuditTrail
 
 logger = get_logger(__name__)
 
 
 class APIKeyService:
-    """Service for managing API keys.
+    """Service for managing API keys, including the audit-log side
+    effect of create/revoke/delete.
 
-    Takes an `APIKeyRepository` directly rather than the whole
-    `ApplicationServices` composition aggregate -- this used to receive
-    `ApplicationServices` and reach into `.api_keys`, which meant every
-    caller had to build (or have on hand) the entire aggregate just to
-    get this one repository, and coupled this service's dependency
-    chain to composition-root internals it has no other reason to know
-    about. See core.app.api.dependencies.get_api_key_service for the
-    FastAPI-side wiring.
+    Takes an `APIKeyRepository` (and optionally an `AuditTrail`)
+    directly rather than the whole `ApplicationServices` composition
+    aggregate -- this used to receive `ApplicationServices` and reach
+    into `.api_keys`, which meant every caller had to build (or have on
+    hand) the entire aggregate just to get this one repository, and
+    coupled this service's dependency chain to composition-root
+    internals it has no other reason to know about. Built once at
+    startup by `core.application_services.ApplicationServices`, not
+    per-request -- see `core.app.api.dependencies.get_api_key_service`
+    for the FastAPI-side wiring, which just reads the shared instance
+    off `application_services` now.
 
     Every call into `self.repository` here is offloaded via
     `asyncio.to_thread` — those calls are blocking psycopg2 I/O underneath
@@ -64,14 +69,26 @@ class APIKeyService:
     _validation_cache_hits: int = 0
     _validation_cache_misses: int = 0
 
-    def __init__(self, repository: APIKeyRepository):
+    def __init__(self, repository: APIKeyRepository, audit: Optional[AuditTrail] = None):
         """Initialize API key service.
 
         Args:
             repository: APIKeyRepository instance to read/write api_keys
                 through.
+            audit: Optional AuditTrail for logging create/revoke/delete
+                events. Was routes/auth.py's job (`application_services.audit
+                .log_audit_event(...)` after each call into this
+                service) -- moved here for the same reason
+                AuthenticationService's audit/revocation calls moved
+                out of routes/auth.py's user-management endpoints: a
+                route that forgot to call it would produce a silent
+                gap, so it belongs with the operation itself, not with
+                every caller of it. Optional (defaults to None) so a
+                caller without an AuditTrail on hand (a script, a
+                test) still gets a working service.
         """
         self.repository = repository
+        self._audit = audit
 
     @staticmethod
     def generate_api_key() -> str:
@@ -127,6 +144,17 @@ class APIKeyService:
                 is_active=True,
             )
             logger.info(f"Created API key {key_id} for user {owner_id}")
+
+            if self._audit is not None:
+                self._audit.log_audit_event(
+                    event_type="api_key.create",
+                    user_id=owner_id,
+                    resource_type="api_key",
+                    resource_id=key_id,
+                    action="create",
+                    success=True,
+                    metadata={"scopes": scopes, "expires_at": expires_at},
+                )
 
             return {
                 "key_id": key_id,
@@ -278,6 +306,15 @@ class APIKeyService:
             if result:
                 logger.info(f"Revoked API key {key_id}")
                 self._evict_by_key_id(key_id)
+            if self._audit is not None:
+                self._audit.log_audit_event(
+                    event_type="api_key.revoke",
+                    user_id=owner_id,
+                    resource_type="api_key",
+                    resource_id=key_id,
+                    action="revoke",
+                    success=True,
+                )
             return result
         except Exception as e:
             logger.error(f"Error revoking API key: {e}")
@@ -300,6 +337,15 @@ class APIKeyService:
             if result:
                 logger.info(f"Deleted API key {key_id}")
                 self._evict_by_key_id(key_id)
+            if self._audit is not None:
+                self._audit.log_audit_event(
+                    event_type="api_key.delete",
+                    user_id=owner_id,
+                    resource_type="api_key",
+                    resource_id=key_id,
+                    action="delete",
+                    success=True,
+                )
             return result
         except Exception as e:
             logger.error(f"Error deleting API key: {e}")

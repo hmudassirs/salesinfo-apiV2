@@ -10,9 +10,10 @@ from fastapi import APIRouter, HTTPException, Request
 
 from core.app.api.dependencies import (
     CurrentUser,
+    GetAPIKeyService,
+    GetAuthenticationService,
     GetCurrentUser,
     GetDB,
-    GetApplicationServices,
     GetSettings,
 )
 from core.app.api.errors import http_exception_for
@@ -26,7 +27,6 @@ from core.auth.authentication_service import (
     LastAdminError,
     UserNotFoundError,
 )
-from core.auth.middleware import invalidate_user_cache, revoke_tokens_issued_before
 from core.auth.models import (
     APIKeyCreate,
     APIKeyDeleteResponse,
@@ -52,12 +52,6 @@ auth_router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
-
-
-def _get_authentication_service(
-    application_services, settings: AppSettings
-) -> AuthenticationService:
-    return AuthenticationService(application_services.users, settings)
 
 
 def _require_owner_or_admin(current_user: CurrentUser, owner_id: str) -> None:
@@ -94,7 +88,7 @@ def _require_admin(current_user: CurrentUser) -> None:
 async def create_api_key(
     request: Request,
     key_data: APIKeyCreate,
-    application_services=GetApplicationServices,
+    api_key_service: APIKeyService = GetAPIKeyService,
     current_user: CurrentUser = GetCurrentUser,
 ) -> APIKeyResponse:
     """Create a new API key for a user.
@@ -111,23 +105,11 @@ async def create_api_key(
     try:
         build_request_context(request)
         _require_owner_or_admin(current_user, key_data.owner_id)
-        api_key_service = APIKeyService(application_services.api_keys)
 
         result = await api_key_service.create_api_key(
             owner_id=key_data.owner_id,
             scopes=key_data.scopes,
             expires_at=key_data.expires_at,
-        )
-
-        # Log API key creation
-        application_services.audit.log_audit_event(
-            event_type="api_key.create",
-            user_id=key_data.owner_id,
-            resource_type="api_key",
-            resource_id=result["key_id"],
-            action="create",
-            success=True,
-            metadata={"scopes": key_data.scopes, "expires_at": key_data.expires_at},
         )
 
         return APIKeyResponse(**result)
@@ -142,7 +124,7 @@ async def create_api_key(
 async def list_api_keys(
     request: Request,
     owner_id: str,
-    application_services=GetApplicationServices,
+    api_key_service: APIKeyService = GetAPIKeyService,
     current_user: CurrentUser = GetCurrentUser,
 ) -> APIKeyListResponse:
     """List all API keys for a user.
@@ -156,7 +138,6 @@ async def list_api_keys(
     try:
         build_request_context(request)
         _require_owner_or_admin(current_user, owner_id)
-        api_key_service = APIKeyService(application_services.api_keys)
 
         keys = await api_key_service.list_api_keys(owner_id)
 
@@ -176,7 +157,7 @@ async def revoke_api_key(
     request: Request,
     key_id: str,
     owner_id: str,
-    application_services=GetApplicationServices,
+    api_key_service: APIKeyService = GetAPIKeyService,
     current_user: CurrentUser = GetCurrentUser,
 ) -> APIKeyRevokeResponse:
     """Revoke an API key (disable without deleting).
@@ -191,19 +172,8 @@ async def revoke_api_key(
     try:
         build_request_context(request)
         _require_owner_or_admin(current_user, owner_id)
-        api_key_service = APIKeyService(application_services.api_keys)
 
         await api_key_service.revoke_api_key(key_id, owner_id)
-
-        # Log API key revocation
-        application_services.audit.log_audit_event(
-            event_type="api_key.revoke",
-            user_id=owner_id,
-            resource_type="api_key",
-            resource_id=key_id,
-            action="revoke",
-            success=True,
-        )
 
         return APIKeyRevokeResponse(
             key_id=key_id,
@@ -221,7 +191,7 @@ async def delete_api_key(
     request: Request,
     key_id: str,
     owner_id: str,
-    application_services=GetApplicationServices,
+    api_key_service: APIKeyService = GetAPIKeyService,
     current_user: CurrentUser = GetCurrentUser,
 ) -> APIKeyDeleteResponse:
     """Delete an API key permanently.
@@ -236,19 +206,8 @@ async def delete_api_key(
     try:
         build_request_context(request)
         _require_owner_or_admin(current_user, owner_id)
-        api_key_service = APIKeyService(application_services.api_keys)
 
         await api_key_service.delete_api_key(key_id, owner_id)
-
-        # Log API key deletion
-        application_services.audit.log_audit_event(
-            event_type="api_key.delete",
-            user_id=owner_id,
-            resource_type="api_key",
-            resource_id=key_id,
-            action="delete",
-            success=True,
-        )
 
         return APIKeyDeleteResponse(
             key_id=key_id,
@@ -268,7 +227,7 @@ async def delete_api_key(
 async def register_user(
     request: Request,
     user_data: UserCreate,
-    application_services=GetApplicationServices,
+    auth_service: AuthenticationService = GetAuthenticationService,
     settings: AppSettings = GetSettings,
     db_session: DatabaseSession = GetDB,
 ) -> UserResponse:
@@ -289,7 +248,6 @@ async def register_user(
         raise HTTPException(status_code=429, detail="Too many registration attempts")
 
     build_request_context(request)
-    auth_service = _get_authentication_service(application_services, settings)
 
     try:
         registered = await auth_service.register(
@@ -303,16 +261,6 @@ async def register_user(
     except Exception as exc:
         logger.exception("Failed to register user username=%s", user_data.username)
         raise HTTPException(status_code=400, detail="Failed to register user") from exc
-
-    application_services.audit.log_audit_event(
-        event_type="user.register",
-        user_id=registered.user_id,
-        resource_type="user",
-        resource_id=registered.user_id,
-        action="create",
-        success=True,
-        metadata={"username": registered.username, "email": registered.email},
-    )
 
     return UserResponse(
         user_id=registered.user_id,
@@ -328,7 +276,7 @@ async def register_user(
 async def login_user(
     request: Request,
     login_data: UserLogin,
-    application_services=GetApplicationServices,
+    auth_service: AuthenticationService = GetAuthenticationService,
     settings: AppSettings = GetSettings,
     db_session: DatabaseSession = GetDB,
 ) -> AuthResponse:
@@ -349,23 +297,14 @@ async def login_user(
         raise HTTPException(status_code=429, detail="Too many login attempts")
 
     build_request_context(request)
-    auth_service = _get_authentication_service(application_services, settings)
 
     try:
         authenticated = await auth_service.authenticate(
-            username=login_data.username, password=login_data.password
-        )
-    except InvalidCredentialsError:
-        application_services.audit.log_audit_event(
-            event_type="user.login",
-            user_id=None,
-            resource_type="user",
-            resource_id="unknown",
-            action="login",
-            success=False,
-            error_message="Invalid credentials",
+            username=login_data.username,
+            password=login_data.password,
             ip_address=_client_ip(request),
         )
+    except InvalidCredentialsError:
         return AuthResponse(
             success=False, user=None, token=None, message="Invalid username or password"
         )
@@ -383,16 +322,6 @@ async def login_user(
         ) from exc
 
     await rate_limiter.reset(db_session, f"login:{_client_ip(request)}")
-
-    application_services.audit.log_audit_event(
-        event_type="user.login",
-        user_id=authenticated.user_id,
-        resource_type="user",
-        resource_id=authenticated.user_id,
-        action="login",
-        success=True,
-        ip_address=_client_ip(request),
-    )
 
     return AuthResponse(
         success=True,
@@ -412,8 +341,7 @@ async def login_user(
 @auth_router.get("/users", response_model=UserListResponse)
 async def list_users(
     request: Request,
-    application_services=GetApplicationServices,
-    settings: AppSettings = GetSettings,
+    auth_service: AuthenticationService = GetAuthenticationService,
     current_user: CurrentUser = GetCurrentUser,
 ) -> UserListResponse:
     """List all users (admin only).
@@ -423,7 +351,6 @@ async def list_users(
     """
     build_request_context(request)
     _require_admin(current_user)
-    auth_service = _get_authentication_service(application_services, settings)
 
     try:
         users_data = await auth_service.list_users()
@@ -454,8 +381,7 @@ async def update_user_role(
     request: Request,
     user_id: str,
     role_update: UserRoleUpdate,
-    application_services=GetApplicationServices,
-    settings: AppSettings = GetSettings,
+    auth_service: AuthenticationService = GetAuthenticationService,
     db_session: DatabaseSession = GetDB,
     current_user: CurrentUser = GetCurrentUser,
 ) -> UserResponse:
@@ -475,11 +401,13 @@ async def update_user_role(
     """
     build_request_context(request)
     _require_admin(current_user)
-    auth_service = _get_authentication_service(application_services, settings)
 
     try:
         updated_user = await auth_service.update_role(
-            user_id=user_id, new_role=role_update.role
+            user_id=user_id,
+            new_role=role_update.role,
+            actor_user_id=current_user.user_id,
+            db_session=db_session,
         )
     except UserNotFoundError:
         raise HTTPException(status_code=404, detail=f"User not found: {user_id}")
@@ -495,31 +423,6 @@ async def update_user_role(
         raise HTTPException(
             status_code=400, detail="Failed to update user role"
         ) from exc
-
-    # Shrink the cache staleness window: without this, a just-promoted
-    # (or demoted) user's role stays as the middleware last cached it
-    # for up to the cache's TTL.
-    invalidate_user_cache(user_id)
-
-    # Any JWT already issued to this user was minted with the *old*
-    # role baked into its payload and, unlike the API-key path, would
-    # otherwise keep being honored with that stale role until it
-    # naturally expires. Force those tokens to be rejected so the role
-    # change takes effect immediately for JWT sessions too.
-    await revoke_tokens_issued_before(db_session, user_id)
-
-    application_services.audit.log_audit_event(
-        event_type="user.role_update",
-        user_id=current_user.user_id,
-        resource_type="user",
-        resource_id=user_id,
-        action="update_role",
-        success=True,
-        metadata={
-            "previous_role": updated_user["previous_role"],
-            "new_role": role_update.role,
-        },
-    )
 
     return UserResponse(
         user_id=updated_user["user_id"],
