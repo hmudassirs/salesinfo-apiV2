@@ -3,8 +3,10 @@ on top of it.
 """
 
 import asyncio
+import contextlib
 import functools
 import logging
+import os
 from typing import Any, Dict, Optional
 
 from core.app.lifecycle.base import LifecycleStep
@@ -12,17 +14,33 @@ from core.app.settings import AppSettings
 from core.application_services import ApplicationServices
 from core.auth.admin_bootstrap import AdminBootstrapService
 from core.caching.cache_maintenance import CacheMaintenance
+from core.concurrency.executors import run_in_state_executor
 from core.observability.context import write_observability_record
 from core.observability.write_queue import ObservabilityWriteQueue
+from core.services.maintenance_service import ApplicationMaintenanceService
 from core.storage.application_state_store import ApplicationStateStore
 from core.storage.schema import ApplicationStateSchema
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_MAINTENANCE_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    """Parse a boolean env var. Local copy of the same tiny helper
+    `core.app.lifecycle.performance` defines for itself -- kept
+    separate rather than shared, since both are a few lines and neither
+    subsystem should have to import the other just for this."""
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 
 class ApplicationStateStep(LifecycleStep):
     """Owns the application state store (api keys, users, logging, tracing,
-    caching, audit) and the ApplicationServices built on top of it.
+    caching, audit), the ApplicationServices built on top of it, and a
+    periodic background maintenance sweep.
 
     The service tables live in the same PostgreSQL database as the
     application data store (`ApplicationStateStore.for_postgres`, using
@@ -41,6 +59,20 @@ class ApplicationStateStep(LifecycleStep):
     AdminBootstrapService, CacheMaintenance) that this step is what
     decides *when* to run, alongside handing the resulting domain
     services to the container.
+
+    Scheduled maintenance (`core.services.maintenance_service
+    .ApplicationMaintenanceService.cleanup()` -- expired cache entries,
+    old logs, old traces, VACUUM) runs here too, on a fixed interval
+    for the lifetime of the app, rather than once at startup: startup
+    is when there's the *least* to clean up (a process that's been
+    running and serving requests is what accumulates old logs/traces/
+    cache in the first place), and a one-shot cleanup at boot would
+    mean everything generated since the process last cleaned up stays
+    unbounded until the next restart -- which, for a long-lived
+    process, could be a very long time. See `_run_maintenance_loop`.
+    Controlled by `MAINTENANCE_ENABLED` (default on) and
+    `MAINTENANCE_INTERVAL_SECONDS` (default 86400 = 24h); only runs in
+    async mode (see `_run_maintenance_loop`'s docstring for why).
     """
 
     name = "application state store"
@@ -61,9 +93,17 @@ class ApplicationStateStep(LifecycleStep):
         self.settings = settings
         self.pool_min_size = pool_min_size
         self.pool_max_size = pool_max_size
+        self.maintenance_enabled = _env_flag("MAINTENANCE_ENABLED", default=True)
+        self.maintenance_interval_seconds = float(
+            os.getenv(
+                "MAINTENANCE_INTERVAL_SECONDS",
+                str(_DEFAULT_MAINTENANCE_INTERVAL_SECONDS),
+            )
+        )
         self.application_state: Optional[ApplicationStateStore] = None
         self.application_services: Optional[ApplicationServices] = None
         self.observability_queue: Optional[ObservabilityWriteQueue] = None
+        self._maintenance_task: Optional["asyncio.Task[None]"] = None
 
     def _build_application_state(self) -> Optional[ApplicationStateStore]:
         if not self.db_config:
@@ -105,6 +145,13 @@ class ApplicationStateStep(LifecycleStep):
         # application_services to decide whether to enqueue (fast path) or
         # write synchronously (fallback, e.g. in tests).
         self.application_services.observability_queue = self.observability_queue
+        # Same queue, wired into AuditTrail directly too -- so
+        # `log_audit_event()` calls made *outside* a full request-
+        # observability record (AuthenticationService.authenticate's
+        # login-audit call, in particular) also enqueue instead of
+        # blocking the caller on a synchronous write. See
+        # AuditTrail.set_queue's docstring.
+        self.application_services.audit.set_queue(self.observability_queue)
 
         return {
             "application_state": self.application_state,
@@ -123,7 +170,42 @@ class ApplicationStateStep(LifecycleStep):
         # ApplicationStateStore's psycopg2 connections are blocking; run the
         # real startup off the event loop thread rather than faking
         # async support for it.
-        return await asyncio.to_thread(self.startup_sync)
+        registrations = await asyncio.to_thread(self.startup_sync)
+        if registrations and self.maintenance_enabled:
+            self._maintenance_task = asyncio.ensure_future(self._run_maintenance_loop())
+            logger.info(
+                "Scheduled maintenance started (interval=%.0fs)",
+                self.maintenance_interval_seconds,
+            )
+        return registrations
+
+    async def _run_maintenance_loop(self) -> None:
+        """Run `ApplicationMaintenanceService.cleanup()` every
+        `maintenance_interval_seconds`, for the lifetime of the app.
+
+        Only started from `startup_async` (never `startup_sync`): sync
+        mode (tests, scripts, `LifecycleMode.SYNC`) has no running
+        event loop to host a background task on -- the same constraint
+        `PerformanceStep`'s docstring notes for its own background
+        loops. `cleanup()` does blocking psycopg2 I/O (including a
+        `VACUUM`, which can take real time on a large table), so each
+        run is offloaded via `run_in_state_executor` rather than
+        called directly on the event loop.
+
+        Sleeps first, then cleans up -- not the other way around -- so
+        a freshly-started process doesn't immediately spend a `VACUUM`
+        on a database that (by definition) has had at most one
+        interval's worth of activity since the last cleanup. Cancellation
+        (on shutdown) is the normal, expected way this loop ends.
+        """
+        maintenance = ApplicationMaintenanceService(self.application_state)
+        while True:
+            await asyncio.sleep(self.maintenance_interval_seconds)
+            try:
+                result = await run_in_state_executor(maintenance.cleanup)
+                logger.info("Scheduled maintenance cleanup completed: %s", result)
+            except Exception:
+                logger.warning("Scheduled maintenance cleanup failed", exc_info=True)
 
     def shutdown_sync(self) -> None:
         if self.observability_queue:
@@ -135,6 +217,11 @@ class ApplicationStateStep(LifecycleStep):
             self.application_state.disconnect()
 
     async def shutdown_async(self) -> None:
+        if self._maintenance_task is not None:
+            self._maintenance_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._maintenance_task
+            self._maintenance_task = None
         if self.observability_queue:
             await asyncio.to_thread(self.observability_queue.stop)
         if self.application_state:

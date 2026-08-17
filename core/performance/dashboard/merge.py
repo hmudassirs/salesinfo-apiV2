@@ -79,7 +79,6 @@ def merge_performance_summaries(
     gauges: dict[tuple, dict[str, object]] = {}
     histograms: dict[tuple, dict[str, object]] = {}
     recent_requests: list[dict[str, object]] = []
-    recent_limit = 0
 
     for snapshot in snapshots:
         request_count += int(snapshot.get("request_count", 0))

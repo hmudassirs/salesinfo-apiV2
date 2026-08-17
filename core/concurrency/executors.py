@@ -25,14 +25,24 @@ This module instead gives each workload its own bounded
       compete with request-serving threads for a slot -- cache
       persistence after a miss, access-stat bookkeeping on a cache hit,
       observability flushes
+    - `password_executor`: PBKDF2 password hashing/verification --
+      CPU-bound, not I/O-bound, so it gets its own pool rather than
+      sharing `application_state_executor`'s. Without this split, a
+      burst of logins can occupy every `application_state_executor`
+      thread with password hashing, leaving ordinary auth/state DB
+      calls (user lookups, cache reads/writes) queued behind them even
+      though PostgreSQL itself has idle connections the whole time.
 
-Sizing: each executor's `max_workers` should track the *matching*
-connection pool's `max_size` (there's no point in more threads than
-there are connections to use them with), plus a little headroom for
-in-flight bookkeeping. `configure_executors()` is called once at
-startup with the real pool sizes; the defaults here exist only so
-importing this module without configuring it still works (e.g. in
-tests).
+Sizing: each I/O-bound executor's `max_workers` should track the
+*matching* connection pool's `max_size` (there's no point in more
+threads than there are connections to use them with), plus a little
+headroom for in-flight bookkeeping. `password_executor` is the
+exception -- it has no connection pool to track, and being CPU-bound,
+sizing it *above* the core count buys nothing (see
+`core/concurrency/cpu.py`'s `password_executor_workers` for why).
+`configure_executors()` is called once at startup with the real pool
+sizes; the defaults here exist only so importing this module without
+configuring it still works (e.g. in tests).
 """
 
 from __future__ import annotations
@@ -139,6 +149,9 @@ _application_state_executor = _TrackedExecutor(
 _background = _TrackedExecutor(
     "background", max_workers=_default_sizing.background_executor_workers
 )
+_password_executor = _TrackedExecutor(
+    "password", max_workers=_default_sizing.password_executor_workers
+)
 
 
 def configure_executors(
@@ -146,6 +159,7 @@ def configure_executors(
     application_data_workers: int | None = None,
     state_workers: int | None = None,
     background_workers: int | None = None,
+    password_workers: int | None = None,
 ) -> None:
     """(Re)size the shared executors. Call once at startup, before the
     first request, with sizes derived from the real connection pool
@@ -158,6 +172,8 @@ def configure_executors(
         _application_state_executor.resize(state_workers)
     if background_workers is not None:
         _background.resize(background_workers)
+    if password_workers is not None:
+        _password_executor.resize(password_workers)
 
 
 async def run_in_application_data_executor(fn: Callable, *args: Any, **kwargs: Any) -> Any:
@@ -179,6 +195,14 @@ async def run_in_background(fn: Callable, *args: Any, **kwargs: Any) -> Any:
     return await _background.run(fn, *args, **kwargs)
 
 
+async def run_in_password_executor(fn: Callable, *args: Any, **kwargs: Any) -> Any:
+    """Run CPU-bound PBKDF2 password hashing/verification off the event
+    loop thread, isolated from `application_state_executor` so a burst
+    of logins can't starve ordinary auth/state DB operations of
+    threads (see this module's docstring)."""
+    return await _password_executor.run(fn, *args, **kwargs)
+
+
 def application_data_executor() -> _TrackedExecutor:
     return _application_data_executor
 
@@ -191,22 +215,28 @@ def background_executor() -> _TrackedExecutor:
     return _background
 
 
+def password_executor() -> _TrackedExecutor:
+    return _password_executor
+
+
 def all_executor_metrics() -> dict[str, ExecutorMetrics]:
     return {
         "application_data": _application_data_executor.metrics(),
         "application_state": _application_state_executor.metrics(),
         "background": _background.metrics(),
+        "password": _password_executor.metrics(),
     }
 
 
 def shutdown_all_executors(wait: bool = True) -> None:
-    """Shut down all three executors. Call once at process shutdown,
-    after anything that might still submit work to them (the cache
+    """Shut down all executors. Call once at process shutdown, after
+    anything that might still submit work to them (the cache
     persistence queue, in particular) has already stopped and drained
     -- see core.app.lifespan's step ordering."""
     _application_data_executor.shutdown(wait=wait)
     _application_state_executor.shutdown(wait=wait)
     _background.shutdown(wait=wait)
+    _password_executor.shutdown(wait=wait)
 
 
 # asyncio.create_task()'s result must be kept referenced somewhere, or the

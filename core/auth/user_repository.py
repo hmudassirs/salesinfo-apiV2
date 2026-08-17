@@ -156,7 +156,7 @@ class UserRepository:
             raise DatabaseUnavailableError("Failed to delete user") from e
 
     def update_last_login(self, user_id: str) -> bool:
-        """Update user's last login timestamp.
+        """Update user's last login timestamp and increment login_count.
 
         Args:
             user_id: User ID
@@ -167,7 +167,10 @@ class UserRepository:
         Raises:
             DatabaseUnavailableError: on an execute failure.
         """
-        sql = "UPDATE users SET last_login_at = ? WHERE user_id = ?"
+        sql = (
+            "UPDATE users SET last_login_at = ?, "
+            "login_count = COALESCE(login_count, 0) + 1 WHERE user_id = ?"
+        )
         try:
             self.application_state.execute(sql, (int(time.time()), user_id))
             return True

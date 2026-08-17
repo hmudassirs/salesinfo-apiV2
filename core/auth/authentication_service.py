@@ -34,9 +34,12 @@ from core.app.settings import AppSettings
 from core.auth.middleware import invalidate_user_cache, revoke_tokens_issued_before
 from core.auth.passwords import hash_password, verify_password
 from core.auth.user_repository import UserRepository
-from core.concurrency.executors import run_in_state_executor
+from core.concurrency.executors import run_in_password_executor, run_in_state_executor
 from core.db.session import DatabaseSession
 from core.observability.audit import AuditTrail
+from core.performance.context import profiled_stage
+from core.performance.enums import PerformanceStage
+from core.performance.types import MetricName
 
 # Fixed-salt hash of a value nobody will ever type as a real password.
 # `authenticate()` verifies against this whenever the username lookup
@@ -137,9 +140,13 @@ class AuthenticationService:
             core.storage.exceptions.DatabaseUnavailableError: store failure.
         """
         # PBKDF2 hashing is CPU-bound and takes real wall-clock time
-        # (~200k SHA-256 iterations) -- run it off the event loop so it
-        # doesn't stall every other in-flight request for its duration.
-        password_hash = await run_in_state_executor(hash_password, password)
+        # (~200k SHA-256 iterations) -- run it off the event loop, on
+        # the CPU-bound password_executor rather than
+        # application_state_executor, so it doesn't stall every other
+        # in-flight request for its duration or occupy threads that
+        # ordinary auth/state DB I/O needs (see
+        # core/concurrency/executors.py's module docstring).
+        password_hash = await run_in_password_executor(hash_password, password)
         user_id = f"user_{int(time.time())}_{secrets.token_hex(4)}"
         created_at = int(time.time())
 
@@ -188,28 +195,45 @@ class AuthenticationService:
             AccountDisabledError: credentials correct, but is_active is False.
             core.storage.exceptions.DatabaseUnavailableError: store failure.
         """
-        user = await run_in_state_executor(self._users.get_by_username, username)
+        # Each step below is wrapped in its own named stage
+        # (login.user_lookup, login.password_verify, ...) so a slow
+        # login can be attributed to a specific stage -- CPU-bound
+        # password hashing vs. executor queueing vs. a slow DB round
+        # trip -- instead of only "login.total". See
+        # core/performance/context.py's profiled_stage docstring: this
+        # is a no-op when core.performance isn't enabled or this
+        # request wasn't sampled.
+        with profiled_stage(PerformanceStage.AUTHENTICATION, MetricName("login.user_lookup")):
+            user = await run_in_state_executor(self._users.get_by_username, username)
 
         # Always run the CPU-bound password check, even when `user` is
         # None -- see this module's docstring for the timing
-        # side-channel this avoids.
+        # side-channel this avoids. Runs on password_executor, not
+        # application_state_executor -- see register()'s comment on
+        # hash_password for why.
         stored_hash = user.get("password_hash", "") if user else _DUMMY_PASSWORD_HASH
-        password_ok = await run_in_state_executor(
-            verify_password, password, stored_hash
-        )
+        with profiled_stage(
+            PerformanceStage.AUTHENTICATION, MetricName("login.password_verify")
+        ):
+            password_ok = await run_in_password_executor(
+                verify_password, password, stored_hash
+            )
 
         if not user or not password_ok:
             if self._audit is not None:
-                self._audit.log_audit_event(
-                    event_type="user.login",
-                    user_id=None,
-                    resource_type="user",
-                    resource_id="unknown",
-                    action="login",
-                    success=False,
-                    error_message="Invalid credentials",
-                    ip_address=ip_address,
-                )
+                with profiled_stage(
+                    PerformanceStage.AUTHENTICATION, MetricName("login.audit")
+                ):
+                    self._audit.log_audit_event(
+                        event_type="user.login",
+                        user_id=None,
+                        resource_type="user",
+                        resource_id="unknown",
+                        action="login",
+                        success=False,
+                        error_message="Invalid credentials",
+                        ip_address=ip_address,
+                    )
             raise InvalidCredentialsError("Invalid username or password")
 
         if not user.get("is_active"):
@@ -224,24 +248,38 @@ class AuthenticationService:
             "iat": issued_at,
             "exp": issued_at + self._settings.jwt_expiry_seconds,
         }
-        token = jwt.encode(
-            token_payload,
-            self._settings.jwt_secret_key,
-            algorithm=self._settings.jwt_algorithm,
-        )
+        with profiled_stage(PerformanceStage.AUTHENTICATION, MetricName("login.jwt_encode")):
+            token = jwt.encode(
+                token_payload,
+                self._settings.jwt_secret_key,
+                algorithm=self._settings.jwt_algorithm,
+            )
 
-        await run_in_state_executor(self._users.update_last_login, user["user_id"])
+        with profiled_stage(
+            PerformanceStage.AUTHENTICATION, MetricName("login.last_login_update")
+        ):
+            await run_in_state_executor(self._users.update_last_login, user["user_id"])
 
         if self._audit is not None:
-            self._audit.log_audit_event(
-                event_type="user.login",
-                user_id=user["user_id"],
-                resource_type="user",
-                resource_id=user["user_id"],
-                action="login",
-                success=True,
-                ip_address=ip_address,
-            )
+            # log_audit_event() itself no longer does synchronous I/O
+            # here when a write queue is configured (AuditTrail
+            # enqueues and returns immediately -- see
+            # core/observability/audit.py) -- this stage now mostly
+            # measures that enqueue, not a DB round trip. Kept
+            # instrumented anyway so a deployment *without* the queue
+            # wired in (falls back to the old synchronous write) still
+            # shows up distinctly instead of being silently absorbed
+            # into "the rest of login".
+            with profiled_stage(PerformanceStage.AUTHENTICATION, MetricName("login.audit")):
+                self._audit.log_audit_event(
+                    event_type="user.login",
+                    user_id=user["user_id"],
+                    resource_type="user",
+                    resource_id=user["user_id"],
+                    action="login",
+                    success=True,
+                    ip_address=ip_address,
+                )
 
         return AuthenticatedUser(
             user_id=user["user_id"],
@@ -334,6 +372,8 @@ class AuthenticationService:
                 resource_id=user_id,
                 action="update_role",
                 success=True,
+                old_values={"role": previous_role},
+                new_values={"role": new_role},
                 metadata={"previous_role": previous_role, "new_role": new_role},
             )
 

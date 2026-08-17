@@ -30,6 +30,7 @@ from core.db.logger import get_logger
 from core.observability.audit import AuditTrail
 from core.observability.request_logger import RequestLogger
 from core.observability.request_tracer import RequestTracer
+from core.performance.adapters.application_state import InstrumentedApplicationStateStore
 from core.services.application_diagnostics import ApplicationDiagnostics
 from core.storage.application_state_store import ApplicationStateStore
 
@@ -37,8 +38,10 @@ logger = get_logger(__name__)
 
 
 class ApplicationServices:
-    """Groups application repositories, cross-cutting infrastructure,
-    and application services around a shared ApplicationStateStore.
+    """Groups domain services (users, api keys, logging, tracing, caching,
+    audit) and the request-facing services built on top of them
+    (api_key_service, authentication_service) around a single
+    application state store connection.
 
     ApplicationServices does not connect, create tables, or disconnect. It
     expects an already-connected ApplicationStateStore and simply wires up the
@@ -65,18 +68,36 @@ class ApplicationServices:
                 else.
         """
         self.application_state = application_state
-        self.api_keys = APIKeyRepository(self.application_state)
-        self.users = UserRepository(self.application_state)
-        self.logging = RequestLogger(self.application_state)
-        self.tracing = RequestTracer(self.application_state)
-        self.caching = QueryResultCache(self.application_state)
+        # Every domain service below is built on this *instrumented*
+        # wrapper, not `self.application_state` directly -- a no-op
+        # passthrough when core.performance is disabled or this request
+        # wasn't sampled (see InstrumentedApplicationStateStore._timed),
+        # but when active it times each SQL call and tags it with the
+        # statement text onto the current request's performance
+        # profiler. That's what lets
+        # core.observability.context.build_request_context populate a
+        # request's trace record with real db_query/db_duration_ms
+        # values instead of the hardcoded empty placeholders it used to
+        # -- see that function's docstring. Administrative code
+        # (ApplicationDiagnostics, AdminBootstrapService,
+        # ApplicationStateSchema, ApplicationMaintenanceService, the
+        # ObservabilityWriteQueue's own background-thread writes, ...)
+        # uses the raw `self.application_state` instead: there's no
+        # per-request trace to attribute a startup or background task's
+        # queries to.
+        instrumented_state = InstrumentedApplicationStateStore(application_state)
+        self.api_keys = APIKeyRepository(instrumented_state)
+        self.users = UserRepository(instrumented_state)
+        self.logging = RequestLogger(instrumented_state)
+        self.tracing = RequestTracer(instrumented_state)
+        self.caching = QueryResultCache(instrumented_state)
         # L1 in-process cache + single-flight coalescing in front of
         # `self.caching` (the L2/application-state cache) -- see
         # query_cache_coordinator.py's module docstring. Routes should
         # go through this, not `self.caching` directly, for anything on
         # the request hot path.
         self.query_cache = QueryCacheCoordinator(self.caching)
-        self.audit = AuditTrail(self.application_state)
+        self.audit = AuditTrail(instrumented_state)
 
         settings = settings or AppSettings.from_env()
         self.api_key_service = APIKeyService(self.api_keys, audit=self.audit)

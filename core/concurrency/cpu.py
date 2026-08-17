@@ -133,6 +133,19 @@ class ConcurrencySizing:
     # *not* compete with request-serving threads (see
     # core/concurrency/executors.py's module docstring).
     background_executor_workers: int
+    # PBKDF2 password hashing/verification is CPU-bound, not I/O-bound
+    # like everything else `application_state_executor` runs (auth
+    # lookups, cache reads/writes) -- it has no connection pool to size
+    # against and no benefit from "a little headroom above the pool",
+    # since there's no pool wait to hide behind. Oversubscribing this
+    # past the core count doesn't add throughput, it adds context-switch
+    # overhead and makes every individual hash slower (see
+    # core/concurrency/executors.py's module docstring for why it's a
+    # separate pool from application_state_executor in the first
+    # place: sharing one pool meant a burst of logins could occupy the
+    # threads application_state_executor needed for ordinary auth/DB
+    # I/O, even while PostgreSQL itself had idle connections).
+    password_executor_workers: int
 
     # --- Query cost-class concurrency semaphores (roadmap Phase 14) ---
     # These gate "how many callers may be mid-execution", not DB
@@ -163,6 +176,11 @@ def recommended_sizing(cpu_count: Optional[int] = None) -> ConcurrencySizing:
         application_data_executor_workers=max(4, n) + 2,
         application_state_executor_workers=max(4, n * 2) + 2,
         background_executor_workers=max(2, n),
+        # Pinned near the core count (no "+2 headroom", no "* 2") --
+        # this pool has nothing to wait on but the CPU itself, so more
+        # threads than cores just means more of them time-slicing
+        # instead of finishing sooner.
+        password_executor_workers=max(2, n),
         fast_query_concurrency=max(20, n * 25),
         normal_query_concurrency=max(8, n * 10),
         expensive_query_concurrency=max(2, n),

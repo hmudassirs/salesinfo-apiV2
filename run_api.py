@@ -148,6 +148,15 @@ configure_executors(
             str(sizing.background_executor_workers),
         )
     ),
+    # CPU-bound, not pool-backed -- see core/concurrency/cpu.py's
+    # password_executor_workers docstring for why this isn't derived
+    # from state_pool_max the way application_state_workers is.
+    password_workers=int(
+        os.getenv(
+            "PASSWORD_EXECUTOR_WORKERS",
+            str(sizing.password_executor_workers),
+        )
+    ),
 )
 
 # Create lifespan manager (async mode for pooled database access)

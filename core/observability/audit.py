@@ -11,15 +11,59 @@ logger = get_logger(__name__)
 
 
 class AuditTrail:
-    """Service for managing audit logs."""
+    """Service for managing audit logs.
 
-    def __init__(self, application_state: ApplicationStateStore):
+    `log_audit_event()` is called directly (not via
+    `run_in_state_executor`) from several async call sites --
+    `core.auth.authentication_service.AuthenticationService.authenticate`
+    in particular, on every login. Before `set_queue()` was wired in,
+    that meant every login blocked the *event loop thread itself* on a
+    real psycopg2 INSERT + commit -- not just adding latency to that
+    one request, but stalling every other in-flight request on the
+    same worker for the duration of the round trip, since nothing else
+    could run on that thread until it returned. `run_in_state_executor`
+    would have fixed the "blocks this request" half of that (it just
+    moves the block to a worker thread), but not the "audit is on
+    login's critical path at all" half -- see `set_queue()`.
+    """
+
+    def __init__(
+        self,
+        application_state: ApplicationStateStore,
+        write_queue: Optional[Any] = None,
+    ):
         """Initialize audit service.
 
         Args:
             application_state: Application state store instance
+            write_queue: Optional `core.observability.write_queue
+                .ObservabilityWriteQueue` to enqueue onto instead of
+                writing synchronously -- see `set_queue()`. Usually
+                left `None` here and wired in afterward via
+                `set_queue()`, since the queue isn't running yet at the
+                point `ApplicationServices` constructs this (see
+                `core.app.lifecycle.application_state.ApplicationStateStep
+                .startup_sync`).
         """
         self.application_state = application_state
+        self._write_queue = write_queue
+
+    def set_queue(self, write_queue: Any) -> None:
+        """Wire in the background flush queue after it's started.
+
+        Once set, an unqueued `log_audit_event()` call (the normal
+        case -- see that method's `_adapter` parameter) enqueues the
+        record and returns immediately instead of acquiring a pooled
+        connection and committing on the caller's own thread. This is
+        the same latency fix `core.observability.write_queue` already
+        gives general request logging/tracing (batching many records'
+        worth of writes into one background transaction instead of one
+        round trip per request) -- audit logging just wasn't routed
+        through it yet. Without a queue wired in (this method never
+        called, e.g. a script/test building `AuditTrail` directly),
+        `log_audit_event()` keeps writing synchronously as before.
+        """
+        self._write_queue = write_queue
 
     def log_audit_event(
         self,
@@ -54,8 +98,41 @@ class AuditTrail:
             success: Whether the action succeeded
             error_message: Error message if failed
             metadata: Additional metadata
-            _adapter: see RequestLogger.log_event()'s docstring.
+            _adapter: see RequestLogger.log_event()'s docstring. When
+                given, this call is already running inside the write
+                queue's background flush transaction (see
+                `core.observability.context.write_observability_record`)
+                -- write directly against it rather than enqueuing
+                again, or the record would never actually get written.
         """
+        if _adapter is None and self._write_queue is not None:
+            # Fast path: hand off to the background flush thread and
+            # return immediately -- no pooled-connection acquire, no
+            # commit, on the request path. Mirrors
+            # core.observability.context.emit_request_observability's
+            # fast path for the same reason; see set_queue()'s
+            # docstring.
+            self._write_queue.enqueue(
+                {
+                    "audit": dict(
+                        event_type=event_type,
+                        action=action,
+                        user_id=user_id,
+                        session_id=session_id,
+                        ip_address=ip_address,
+                        user_agent=user_agent,
+                        resource_type=resource_type,
+                        resource_id=resource_id,
+                        old_values=old_values,
+                        new_values=new_values,
+                        success=success,
+                        error_message=error_message,
+                        metadata=metadata,
+                    )
+                }
+            )
+            return
+
         timestamp = int(time.time())
 
         old_values_json = json.dumps(old_values) if old_values else None

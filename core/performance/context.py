@@ -10,9 +10,12 @@ never see or contend on each other's `ContextVar` value.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from .enums import PerformanceStage
+from .types import MetricName
 
 if TYPE_CHECKING:
     from .request_profiler import RequestProfiler
@@ -52,3 +55,25 @@ def bind_profiler(profiler: RequestProfiler | None) -> Iterator[RequestProfiler 
         yield profiler
     finally:
         reset_current_profiler(token)
+
+
+def profiled_stage(stage: PerformanceStage, name: MetricName) -> Any:
+    """`with profiled_stage(...):` a call site's usual
+    `profiler = get_current_profiler(); if profiler is not None: with
+    profiler.stage(...): ...` reduced to one line, for call sites (e.g.
+    `core.auth.authentication_service`) that need to time several
+    short stages in a row and would otherwise repeat that branch once
+    per stage.
+
+    Returns a real stage scope when a profiler is bound, otherwise
+    `contextlib.nullcontext()` -- callers don't need their own `is None`
+    check either way, matching how `RequestProfiler`/`_NullProfiler`
+    already make presence-checking optional within a single profiler
+    instance (see `_NullProfiler.stage`'s docstring); this extends that
+    same "always safe to use" property to the case where there's no
+    profiler bound at all.
+    """
+    profiler = get_current_profiler()
+    if profiler is None:
+        return nullcontext()
+    return profiler.stage(stage, name)

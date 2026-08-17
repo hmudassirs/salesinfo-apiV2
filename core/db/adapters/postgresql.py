@@ -130,6 +130,29 @@ class PostgreSQLAdapter:
                 password=self.password,
                 **self.extra_options,
             )
+            # Without this, psycopg2 defaults to autocommit=False, which
+            # left an implicit transaction open after every fetch_one()/
+            # fetch_all() call (unlike execute(), below, which explicitly
+            # commits). Harmless for plain SELECTs, but for a statement
+            # that both writes and reads back via RETURNING -- issued
+            # through fetch_one() specifically to capture that value,
+            # e.g. core.auth.shared_state.PersistentAuthState
+            # .check_and_record_attempt()'s rate-limit UPSERT -- the row
+            # lock from that write was never released. It stayed held on
+            # that pooled connection until something else unrelated
+            # later happened to call execute() (which does commit) on
+            # the same connection, so every other caller trying to touch
+            # that row in the meantime queued up behind it -- observed
+            # in production as login's rate-limit check occasionally
+            # taking seconds. Matches the invariant
+            # core.storage.application_state_store.ApplicationStateStore's
+            # own pool already documents and relies on for the same
+            # reason (see _ApplicationStateAdapter's docstring) -- this
+            # brings the async/DatabaseSession adapter in line with it.
+            # core.db.transactions.transaction()/async_transaction()
+            # (explicit BEGIN/COMMIT/ROLLBACK statements) also assume
+            # this is already true; it silently wasn't.
+            self.connection.autocommit = True
 
             # Use RealDictCursor for dict-like rows
             self.connection.cursor_factory = psycopg2.extras.RealDictCursor

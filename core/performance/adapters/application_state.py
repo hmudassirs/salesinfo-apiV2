@@ -55,9 +55,38 @@ if TYPE_CHECKING:
 
 _T = TypeVar("_T")
 
+# Longest SQL text kept on a metric point's tags -- see
+# `_sql_tag`'s docstring for why this is truncated rather than stored
+# in full.
+_MAX_SQL_TAG_LENGTH = 200
+
+
+def _sql_tag(sql: str) -> dict[str, str]:
+    """Build the `tags={"sql": ...}` passed to `profiler.stage(...)`.
+
+    Truncated to `_MAX_SQL_TAG_LENGTH`: this ends up as a tag on an
+    in-memory `MetricPoint` (and, if `core.observability.context`
+    reads it back for a request's trace record, in the `traces.db_query`
+    column) -- unbounded query text (e.g. a large `IN (...)` list)
+    would bloat both for no real diagnostic benefit beyond "which
+    statement was this."
+    """
+    text = " ".join(sql.split())  # collapse embedded newlines/indentation
+    if len(text) > _MAX_SQL_TAG_LENGTH:
+        text = text[:_MAX_SQL_TAG_LENGTH] + "…"
+    return {"sql": text}
+
 
 class InstrumentedApplicationStateStore:
-    """Wrap a `ApplicationStateStore`, timing its SQL execute/fetch operations."""
+    """Wrap a `ApplicationStateStore`, timing its SQL execute/fetch operations.
+
+    Also tags each timed operation with the SQL text it ran (see
+    `_sql_tag`), which is what lets
+    `core.observability.context.build_request_context` populate a
+    request's trace record with real `db_query`/`db_duration_ms`
+    values instead of the empty placeholders it previously hardcoded --
+    see that function's docstring.
+    """
 
     __slots__ = ("_application_state",)
 
@@ -82,6 +111,7 @@ class InstrumentedApplicationStateStore:
             PerformanceStage.SQL_EXECUTE,
             MetricName("application_state_execute"),
             lambda: self._application_state.execute(sql, params),
+            sql=sql,
         )
 
     def fetch_one(self, sql: str, params: tuple[Any, ...] = ()) -> Any:
@@ -90,6 +120,7 @@ class InstrumentedApplicationStateStore:
             PerformanceStage.SQL_FETCH,
             MetricName("application_state_fetch_one"),
             lambda: self._application_state.fetch_one(sql, params),
+            sql=sql,
         )
 
     def fetch_all(self, sql: str, params: tuple[Any, ...] = ()) -> Any:
@@ -98,6 +129,7 @@ class InstrumentedApplicationStateStore:
             PerformanceStage.SQL_FETCH,
             MetricName("application_state_fetch_all"),
             lambda: self._application_state.fetch_all(sql, params),
+            sql=sql,
         )
 
     def execute_on(
@@ -112,6 +144,7 @@ class InstrumentedApplicationStateStore:
             PerformanceStage.SQL_EXECUTE,
             MetricName("application_state_execute_on"),
             lambda: self._application_state.execute_on(adapter, sql, params),
+            sql=sql,
         )
 
     def fetch_one_on(self, adapter: Any, sql: str, params: tuple[Any, ...] = ()) -> Any:
@@ -120,6 +153,7 @@ class InstrumentedApplicationStateStore:
             PerformanceStage.SQL_FETCH,
             MetricName("application_state_fetch_one_on"),
             lambda: self._application_state.fetch_one_on(adapter, sql, params),
+            sql=sql,
         )
 
     @contextmanager
@@ -130,7 +164,11 @@ class InstrumentedApplicationStateStore:
         commits on normal exit or rolls back and re-raises on
         exception — identical behaviour to the wrapped method. See the
         module docstring for why this is timed as a single span rather
-        than split into begin/commit/rollback stages.
+        than split into begin/commit/rollback stages. No `sql` tag here
+        (unlike the methods above) -- the statements run *inside* the
+        transaction go through `execute_on`/`fetch_one_on`, which each
+        tag their own SQL; this span is only the acquire/commit-or-
+        rollback wrapper around them.
         """
         profiler = get_current_profiler()
         if profiler is None:
@@ -147,12 +185,19 @@ class InstrumentedApplicationStateStore:
             yield adapter
 
     @staticmethod
-    def _timed(stage: PerformanceStage, name: MetricName, call: Callable[[], _T]) -> _T:
+    def _timed(
+        stage: PerformanceStage,
+        name: MetricName,
+        call: Callable[[], _T],
+        *,
+        sql: str | None = None,
+    ) -> _T:
         """Run `call()` under `stage`/`name` when a profiler is bound."""
         profiler = get_current_profiler()
         if profiler is None:
             return call()
-        with profiler.stage(stage, name):
+        tags = _sql_tag(sql) if sql is not None else None
+        with profiler.stage(stage, name, tags=tags):
             return call()
 
 

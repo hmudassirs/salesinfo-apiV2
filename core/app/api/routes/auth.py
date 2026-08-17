@@ -43,6 +43,9 @@ from core.auth.models import (
 from core.db.logger import get_logger
 from core.db.session import DatabaseSession
 from core.observability.context import build_request_context
+from core.performance.context import profiled_stage
+from core.performance.enums import PerformanceStage
+from core.performance.types import MetricName
 from core.storage.exceptions import RepositoryError
 
 logger = get_logger(__name__)
@@ -239,13 +242,18 @@ async def register_user(
     Returns:
         UserResponse with created user data
     """
-    if settings.auth_rate_limit_enabled and not await rate_limiter.check_and_record(
-        db_session,
-        f"register:{_client_ip(request)}",
-        max_attempts=settings.auth_rate_limit_max_attempts,
-        window_seconds=settings.auth_rate_limit_window_seconds,
-    ):
-        raise HTTPException(status_code=429, detail="Too many registration attempts")
+    if settings.auth_rate_limit_enabled:
+        with profiled_stage(
+            PerformanceStage.AUTHENTICATION, MetricName("register.rate_limit")
+        ):
+            allowed = await rate_limiter.check_and_record(
+                db_session,
+                f"register:{_client_ip(request)}",
+                max_attempts=settings.auth_rate_limit_max_attempts,
+                window_seconds=settings.auth_rate_limit_window_seconds,
+            )
+        if not allowed:
+            raise HTTPException(status_code=429, detail="Too many registration attempts")
 
     build_request_context(request)
 
@@ -288,13 +296,23 @@ async def login_user(
     Returns:
         AuthResponse with user data and token
     """
-    if settings.auth_rate_limit_enabled and not await rate_limiter.check_and_record(
-        db_session,
-        f"login:{_client_ip(request)}",
-        max_attempts=settings.auth_rate_limit_max_attempts,
-        window_seconds=settings.auth_rate_limit_window_seconds,
-    ):
-        raise HTTPException(status_code=429, detail="Too many login attempts")
+    if settings.auth_rate_limit_enabled:
+        # See core/auth/rate_limiter.py + core/auth/shared_state.py: this
+        # is a real Postgres UPSERT...RETURNING round trip, not an
+        # in-memory check -- and it runs before authenticate() even
+        # starts, so without its own stage it was invisible time sitting
+        # in front of every login.* stage AuthenticationService records
+        # (see profiled_stage's docstring for why this is safe to wrap
+        # unconditionally, sampled or not).
+        with profiled_stage(PerformanceStage.AUTHENTICATION, MetricName("login.rate_limit")):
+            allowed = await rate_limiter.check_and_record(
+                db_session,
+                f"login:{_client_ip(request)}",
+                max_attempts=settings.auth_rate_limit_max_attempts,
+                window_seconds=settings.auth_rate_limit_window_seconds,
+            )
+        if not allowed:
+            raise HTTPException(status_code=429, detail="Too many login attempts")
 
     build_request_context(request)
 
@@ -321,7 +339,10 @@ async def login_user(
             status_code=400, detail="Failed to authenticate user"
         ) from exc
 
-    await rate_limiter.reset(db_session, f"login:{_client_ip(request)}")
+    with profiled_stage(
+        PerformanceStage.AUTHENTICATION, MetricName("login.rate_limit_reset")
+    ):
+        await rate_limiter.reset(db_session, f"login:{_client_ip(request)}")
 
     return AuthResponse(
         success=True,
