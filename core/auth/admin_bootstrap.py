@@ -6,12 +6,15 @@ former docstring for the full history (this replaced a hardcoded
 *user*, not a generic store responsibility.
 """
 
-import os
 import time
+from typing import TYPE_CHECKING
 
 from core.auth.passwords import hash_password
 from core.db.logger import get_logger
 from core.storage.application_state_store import ApplicationStateStore
+
+if TYPE_CHECKING:
+    from core.app.settings import AppSettings
 
 logger = get_logger(__name__)
 
@@ -20,26 +23,47 @@ class AdminBootstrapService:
     """Creates the initial admin user, but only from an explicitly
     configured password -- never a hardcoded default.
 
-    A no-op unless `INITIAL_ADMIN_PASSWORD` is set in the environment;
-    the recommended way to create the first admin is the standalone
+    A no-op unless `settings.initial_admin_password` is set; the
+    recommended way to create the first admin is the standalone
     `bootstrap_admin.py` script (interactive password prompt, no
-    plaintext in shell history/process list). This env-var path exists
+    plaintext in shell history/process list) -- that script builds its
+    own `ApplicationStateStore` directly and never uses this class, so
+    it's unaffected by anything below (see the framework review's
+    "standalone classes versus application classes" distinction: a
+    genuinely standalone CLI tool reading its own env vars is fine;
+    this class is an application-integration component, always
+    constructed by `ApplicationStateStep` with the process's one
+    `AppSettings`). This class's env-var-via-settings path exists
     mainly for scripted/CI first-boot setups where a prompt isn't
     possible.
     """
 
-    def __init__(self, application_state: ApplicationStateStore):
+    def __init__(
+        self,
+        application_state: ApplicationStateStore,
+        *,
+        settings: "AppSettings",
+    ):
         self.application_state = application_state
+        # Required, not Optional: `AppSettings.from_env()` is the one
+        # place that reads the environment -- see this class's
+        # docstring. There used to be an `if self.settings is not None
+        # else os.getenv(...)` fallback here; the one real construction
+        # site (`ApplicationStateStep.startup_sync()`) always passed
+        # settings anyway, so the fallback was dead in production and
+        # only weakened that invariant. Tests now construct an explicit
+        # `AppSettings(...)` instead of relying on it.
+        self.settings = settings
 
     def initialize(self) -> None:
-        password = os.getenv("INITIAL_ADMIN_PASSWORD")
-        username = os.getenv("INITIAL_ADMIN_USERNAME", "admin")
+        password = self.settings.initial_admin_password
+        username = self.settings.initial_admin_username
 
         if not password:
             result = self.application_state.fetch_one(
                 "SELECT COUNT(*) AS count "
                 "FROM users "
-                "WHERE roles LIKE ?",
+                "WHERE roles LIKE %s",
                 ("%admin%",),
             )
 
@@ -71,14 +95,14 @@ class AdminBootstrapService:
         # bootstrapped by whichever worker won the race. Postgres's own
         # conflict handling makes this atomic without needing a
         # separate advisory lock the way the migration race did.
-        email = os.getenv("INITIAL_ADMIN_EMAIL", f"{username}@preparedata.local")
+        email = self.settings.initial_admin_email or f"{username}@preparedata.local"
         user_id = f"user_admin_{int(time.time())}"
         password_hash = hash_password(password)
         created_at = int(time.time())
 
         sql = """
         INSERT INTO users (user_id, username, email, password_hash, roles, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (username) DO NOTHING
         """
         result = self.application_state.execute(
@@ -87,6 +111,6 @@ class AdminBootstrapService:
         )
 
         if result.rowcount == 0:
-            logger.info(f"User '{username}' already exists; skipping admin bootstrap.")
+            logger.info("User '%s' already exists; skipping admin bootstrap.", username)
         else:
-            logger.info(f"Created initial admin user '{username}' (user_id={user_id})")
+            logger.info("Created initial admin user '%s' (user_id=%s)", username, user_id)

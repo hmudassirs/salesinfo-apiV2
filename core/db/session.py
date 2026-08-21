@@ -82,7 +82,7 @@ from core.db.protocols import DatabaseAdapter as DBAdapter
 # ---------------------------------------------------------------------
 
 
-async def _run_in_thread(fn, *args):
+async def _run_in_thread(fn, *args, **kwargs):
     """Centralized async → thread execution with optional metrics and tracing.
 
     Measures elapsed time and records it to `APP_LATENCY` when available.
@@ -92,6 +92,10 @@ async def _run_in_thread(fn, *args):
     so a trace couldn't tell an execute() from a fetch_all() from a
     disconnect(). The first positional arg is attached as `db.statement`
     when it looks like SQL, truncated to keep spans small.
+
+    `**kwargs` exists specifically for `statement_timeout_seconds` (see
+    `AsyncSessionWrapper.fetch_all`) -- forwarded through
+    `run_in_application_data_executor` unchanged.
     """
     start = time.perf_counter()
 
@@ -100,9 +104,9 @@ async def _run_in_thread(fn, *args):
         with _TRACER.start_as_current_span(span_name) as span:
             if args and isinstance(args[0], str):
                 span.set_attribute("db.statement", args[0][:200])
-            result = await run_in_application_data_executor(fn, *args)
+            result = await run_in_application_data_executor(fn, *args, **kwargs)
     else:
-        result = await run_in_application_data_executor(fn, *args)
+        result = await run_in_application_data_executor(fn, *args, **kwargs)
 
     elapsed = time.perf_counter() - start
     if APP_LATENCY is not None:
@@ -122,6 +126,43 @@ def _safe_rollback(adapter: DBAdapter) -> None:
         logger.debug("Rollback failed", exc_info=True)
 
 
+def _begin_transaction(adapter: DBAdapter) -> None:
+    """Turn off this connection's normal per-statement autocommit (see
+    `core.db.adapters.postgresql.PostgreSQLAdapter.connect()`) so the
+    statements run before the matching `_commit_transaction`/
+    `_rollback_transaction` share one real, atomic transaction instead
+    of each committing itself immediately -- see
+    `core.performance.adapters.transactions.instrumented_transaction`'s
+    docstring for why SQL `BEGIN`/`COMMIT`/`ROLLBACK` statements routed
+    through `execute()` never actually did this.
+    """
+    adapter.connection.autocommit = False
+
+
+def _commit_transaction(adapter: DBAdapter) -> None:
+    """End a transaction started by `_begin_transaction`, keeping every
+    statement run since. Always restores `autocommit=True` afterward --
+    every other method on this wrapper, and the pool itself, assumes
+    that as the connection's resting state (see
+    `core.storage.application_state_store.ApplicationStateStore
+    .transaction()`'s matching restore)."""
+    try:
+        adapter.connection.commit()
+    finally:
+        adapter.connection.autocommit = True
+
+
+def _rollback_transaction(adapter: DBAdapter) -> None:
+    """Best-effort rollback (swallows its own failure, like
+    `_safe_rollback`) that also restores `autocommit=True` afterward --
+    see `_commit_transaction`'s docstring for why that restore matters
+    regardless of which of commit/rollback ends the transaction."""
+    try:
+        _safe_rollback(adapter)
+    finally:
+        adapter.connection.autocommit = True
+
+
 # ---------------------------------------------------------------------
 # Session wrappers
 # ---------------------------------------------------------------------
@@ -135,17 +176,74 @@ class AsyncSessionWrapper:
     def __init__(self, adapter: DBAdapter):
         self._adapter = adapter
 
-    async def execute(self, sql: str, params=None):
-        return await _run_in_thread(self._adapter.execute, sql, params or ())
+    async def execute(self, sql: str, params=None, *, statement_timeout_seconds=None):
+        return await _run_in_thread(
+            self._adapter.execute,
+            sql,
+            params or (),
+            statement_timeout_seconds=statement_timeout_seconds,
+        )
 
-    async def fetch_all(self, sql: str, params=None):
-        return await _run_in_thread(self._adapter.fetch_all, sql, params or ())
+    async def fetch_all(self, sql: str, params=None, *, statement_timeout_seconds=None):
+        """See `PostgreSQLAdapter.fetch_all`'s `statement_timeout_seconds`
+        docstring -- this is the one parameter worth knowing about here:
+        passing it makes PostgreSQL itself, not this coroutine's
+        caller, the thing that stops a runaway query. `core.services
+        .query_service.QueryService._execute()` is the caller that
+        matters -- see that module's docstring for why `asyncio.wait_for()`
+        around this call is *not* a safe substitute."""
+        return await _run_in_thread(
+            self._adapter.fetch_all,
+            sql,
+            params or (),
+            statement_timeout_seconds=statement_timeout_seconds,
+        )
 
-    async def fetch_one(self, sql: str, params=None):
-        return await _run_in_thread(self._adapter.fetch_one, sql, params or ())
+    async def fetch_one(self, sql: str, params=None, *, statement_timeout_seconds=None):
+        return await _run_in_thread(
+            self._adapter.fetch_one,
+            sql,
+            params or (),
+            statement_timeout_seconds=statement_timeout_seconds,
+        )
+
+    async def fetch_bounded(
+        self,
+        sql: str,
+        params=None,
+        *,
+        max_rows: int,
+        max_bytes: int,
+        batch_size: int = 500,
+        statement_timeout_seconds=None,
+    ):
+        """See `PostgreSQLAdapter.fetch_bounded`'s docstring -- streams
+        via a server-side cursor and stops as soon as `max_rows`/
+        `max_bytes` is reached, instead of `fetch_all`'s "materialize
+        everything, truncate afterward." `core.services.query_service
+        .QueryService._execute` is the caller that matters here."""
+        return await _run_in_thread(
+            self._adapter.fetch_bounded,
+            sql,
+            params or (),
+            max_rows=max_rows,
+            max_bytes=max_bytes,
+            batch_size=batch_size,
+            statement_timeout_seconds=statement_timeout_seconds,
+        )
+
+    async def begin(self):
+        """Start an explicit transaction -- see `_begin_transaction`'s
+        docstring. Pairs with `commit()`/`rollback()`."""
+        await _run_in_thread(_begin_transaction, self._adapter)
+
+    async def commit(self):
+        """End a transaction started by `begin()`. See
+        `_commit_transaction`'s docstring."""
+        await _run_in_thread(_commit_transaction, self._adapter)
 
     async def rollback(self):
-        await _run_in_thread(_safe_rollback, self._adapter)
+        await _run_in_thread(_rollback_transaction, self._adapter)
 
     async def close(self):
         await _run_in_thread(self._adapter.disconnect)
@@ -159,17 +257,52 @@ class SyncSessionWrapper:
     def __init__(self, adapter: DBAdapter):
         self._adapter = adapter
 
-    def execute(self, sql: str, params=None):
-        return self._adapter.execute(sql, params or ())
+    def execute(self, sql: str, params=None, *, statement_timeout_seconds=None):
+        return self._adapter.execute(
+            sql, params or (), statement_timeout_seconds=statement_timeout_seconds
+        )
 
-    def fetch_all(self, sql: str, params=None):
-        return self._adapter.fetch_all(sql, params or ())
+    def fetch_all(self, sql: str, params=None, *, statement_timeout_seconds=None):
+        return self._adapter.fetch_all(
+            sql, params or (), statement_timeout_seconds=statement_timeout_seconds
+        )
 
-    def fetch_one(self, sql: str, params=None):
-        return self._adapter.fetch_one(sql, params or ())
+    def fetch_one(self, sql: str, params=None, *, statement_timeout_seconds=None):
+        return self._adapter.fetch_one(
+            sql, params or (), statement_timeout_seconds=statement_timeout_seconds
+        )
+
+    def fetch_bounded(
+        self,
+        sql: str,
+        params=None,
+        *,
+        max_rows: int,
+        max_bytes: int,
+        batch_size: int = 500,
+        statement_timeout_seconds=None,
+    ):
+        """See `AsyncSessionWrapper.fetch_bounded`'s docstring -- same
+        contract, no `async`/`await`."""
+        return self._adapter.fetch_bounded(
+            sql,
+            params or (),
+            max_rows=max_rows,
+            max_bytes=max_bytes,
+            batch_size=batch_size,
+            statement_timeout_seconds=statement_timeout_seconds,
+        )
+
+    def begin(self):
+        """See `AsyncSessionWrapper.begin()`."""
+        _begin_transaction(self._adapter)
+
+    def commit(self):
+        """See `AsyncSessionWrapper.commit()`."""
+        _commit_transaction(self._adapter)
 
     def rollback(self):
-        _safe_rollback(self._adapter)
+        _rollback_transaction(self._adapter)
 
     def close(self):
         self._adapter.disconnect()
@@ -339,7 +472,7 @@ class DatabaseSession:
                 try:
                     pool.release(c)
                 except Exception:
-                    pass
+                    logger.debug("Failed to release warmed connection", exc_info=True)
 
         # leave sizer at warmed level (so pool stays warm)
         return created
@@ -382,7 +515,7 @@ class DatabaseSession:
                 try:
                     await pool.release(c)
                 except Exception:
-                    pass
+                    logger.debug("Failed to release warmed connection", exc_info=True)
 
         return created
 
@@ -569,12 +702,10 @@ class DatabaseSession:
         the connection → `COMMIT`/`ROLLBACK`
         (`TRANSACTION_COMMIT`/`TRANSACTION_ROLLBACK`) → release
         (`POOL_RELEASE`), each step timed when a profiler is bound — see
-        `core.performance.adapters.transactions.instrumented_async_transaction`
-        and `docs/performance/adapters.md`. Opt-in and not called by any
-        route in this codebase yet (neither is the uninstrumented
-        `core.db.transactions.async_transaction` it wraps); available for
-        any write path that wants explicit transactional semantics with
-        full observability, e.g.:
+        `core.performance.adapters.transactions.instrumented_async_transaction`.
+        Opt-in and not called by any route in this codebase yet;
+        available for any write path that wants explicit transactional
+        semantics with full observability, e.g.:
 
             async with db_session.get_async_transaction() as conn:
                 await conn.execute("INSERT INTO ...", params)

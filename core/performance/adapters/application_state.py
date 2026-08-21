@@ -19,8 +19,9 @@ the `SQL` / `CACHE_LOOKUP` / `CACHE_STORE` nodes in
   timed as one `TRANSACTION_COMMIT` span: `ApplicationStateStore.transaction`
   relies on the underlying connection's `.commit()`/`.rollback()` API
   rather than executing explicit `BEGIN`/`COMMIT`/`ROLLBACK`
-  statements (contrast `core.db.transactions.transaction`, which
-  `adapters.transactions` times per SQL statement), so there is no
+  statements (contrast `core.performance.adapters.transactions
+  .instrumented_transaction`, which times begin/commit/rollback as
+  separate stages), so there is no
   separate begin/commit boundary to instrument without duplicating
   `ApplicationStateStore`'s private connection-acquisition logic. Everything
   else (`connect`, `disconnect`, `metrics`, `create_tables`, the

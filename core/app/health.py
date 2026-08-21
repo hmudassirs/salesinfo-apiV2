@@ -39,7 +39,7 @@ class HealthCheck:
                 if not is_healthy:
                     health_status["status"] = "degraded"
         except Exception as e:
-            logger.error(f"Health check failed: {e}")
+            logger.exception("Health check failed")
             health_status["status"] = "unhealthy"
             health_status["error"] = str(e)
 
@@ -63,7 +63,7 @@ class HealthCheck:
                 if not is_healthy:
                     health_status["status"] = "degraded"
         except Exception as e:
-            logger.error(f"Health check failed: {e}")
+            logger.exception("Health check failed")
             health_status["status"] = "unhealthy"
             health_status["error"] = str(e)
 

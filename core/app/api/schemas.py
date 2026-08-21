@@ -39,7 +39,23 @@ class QueryResponse(BaseModel):
 
     success: bool = Field(..., description="Whether query succeeded")
     data: Optional[list[dict]] = Field(None, description="Query results")
-    error: Optional[str] = Field(None, description="Error message if failed")
+    error: Optional[str] = Field(
+        None,
+        description=(
+            "Safe, generic error message if the query failed. Never "
+            "contains raw exception text, SQL fragments, table/column "
+            "names, or other backend detail -- see request_id to look "
+            "up the full server-side diagnostics."
+        ),
+    )
+    request_id: Optional[str] = Field(
+        None,
+        description=(
+            "Correlates this response with the full exception/SQL/"
+            "stacktrace recorded in server-side logs -- quote this when "
+            "reporting a failed query."
+        ),
+    )
     row_count: int = Field(0, description="Number of rows returned")
     cached: bool = Field(False, description="Whether result came from cache")
     truncated: bool = Field(

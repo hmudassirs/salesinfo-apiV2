@@ -30,15 +30,7 @@ from dataclasses import dataclass, fields
 from typing import Any, Optional
 
 from core.application_services import ApplicationServices
-from core.auth.api_key_repository import APIKeyRepository
-from core.auth.api_key_service import APIKeyService
-from core.auth.authentication_service import AuthenticationService
-from core.auth.user_repository import UserRepository
-from core.caching.query_result_cache import QueryResultCache
 from core.db.session import DatabaseSession
-from core.observability.audit import AuditTrail
-from core.observability.request_logger import RequestLogger
-from core.observability.request_tracer import RequestTracer
 from core.storage.application_state_store import ApplicationStateStore
 
 logger = logging.getLogger(__name__)
@@ -46,7 +38,22 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ApplicationContainer:
-    """One typed field per object a LifecycleStep can register.
+    """One typed field per object a LifecycleStep needs to hand to
+    *another* LifecycleStep during startup, before `app.state` exists.
+
+    This is deliberately not a mirror of everything `ApplicationServices`
+    already exposes. `query_cache`, `request_logger`, `request_tracer`,
+    `audit_trail`, `api_key_repository`, `user_repository`,
+    `api_key_service`, and `authentication_service` all live on
+    `application_services` (see core/application_services.py) once that
+    step has run; a caller who needs one of those reaches
+    `container.application_services.<name>` rather than a second,
+    duplicate top-level field here. The fields below are only the ones
+    a *different* step genuinely needs before `application_services`
+    exists yet -- e.g. `PerformanceStep`'s cross-process snapshot loop
+    reads `container.application_state` directly, since
+    `ApplicationStateStep` (which builds `application_services`) runs
+    after it. See this module's top docstring for the full rationale.
 
     Adding a new field here is the one place a new cross-step
     dependency needs to be declared -- the same "one place to remember"
@@ -57,14 +64,6 @@ class ApplicationContainer:
     db_session: Optional[DatabaseSession] = None
     application_state: Optional[ApplicationStateStore] = None
     application_services: Optional[ApplicationServices] = None
-    query_cache: Optional[QueryResultCache] = None
-    request_logger: Optional[RequestLogger] = None
-    request_tracer: Optional[RequestTracer] = None
-    audit_trail: Optional[AuditTrail] = None
-    api_key_repository: Optional[APIKeyRepository] = None
-    user_repository: Optional[UserRepository] = None
-    api_key_service: Optional[APIKeyService] = None
-    authentication_service: Optional[AuthenticationService] = None
     performance_registry: Optional[Any] = None
 
     def register(self, name: str, service: Any) -> None:
@@ -88,20 +87,7 @@ class ApplicationContainer:
                 "subsystem."
             )
         setattr(self, name, service)
-        logger.info(f"Registered service: {name}")
-
-    def set_database_session(self, session: DatabaseSession) -> None:
-        """Set the application data DatabaseSession."""
-        self.db_session = session
-        logger.info("Registered service: db_session")
-
-    def get_database_session(self) -> Optional[DatabaseSession]:
-        """Get the application data DatabaseSession."""
-        return self.db_session
-
-    def get_application_state(self) -> Optional[ApplicationStateStore]:
-        """Get the application state store."""
-        return self.application_state
+        logger.info("Registered service: %s", name)
 
     def clear(self) -> None:
         """Reset every field to None (shutdown)."""

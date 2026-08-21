@@ -1,5 +1,19 @@
 """Publish/collect per-worker performance snapshots via Postgres.
 
+Lives under `core.performance.adapters` (moved here from
+`core.performance.adapters.cross_process`) for the same reason the rest of this
+package does: it's the one piece of `core.performance` with a hard,
+unguarded dependency on an application-specific store
+(`core.storage.application_state_store.ApplicationStateStore`), so it
+belongs with the other adapters rather than in `core.performance`'s
+otherwise-standalone core (registry, aggregator, histogram, timer,
+metric, types -- none of which import anything outside
+`core.performance` itself). Unlike this package's other adapters, it
+doesn't wrap an existing object for per-call timing; it's still
+grouped here because "reaches outside `core.performance`" is the
+dividing line this package draws, not "wraps something for timing"
+specifically -- see `core.performance.adapters`'s own docstring.
+
 Each `uvicorn run_api:app --workers N` worker (N > 1) is a separate OS
 process with its own `core.performance.registry.PerformanceRegistry` --
 there's no shared memory between them (see `registry.py`'s module
@@ -77,7 +91,7 @@ class WorkerSnapshotStore:
                 """
                 INSERT INTO perf_worker_snapshots
                     (worker_id, hostname, pid, updated_at, snapshot_json)
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (worker_id) DO UPDATE SET
                     updated_at = EXCLUDED.updated_at,
                     snapshot_json = EXCLUDED.snapshot_json
@@ -109,7 +123,7 @@ class WorkerSnapshotStore:
         cutoff = int(time.time() - max_age_seconds)
         rows = self._application_state.fetch_all(
             "SELECT worker_id, snapshot_json FROM perf_worker_snapshots "
-            "WHERE updated_at >= ?",
+            "WHERE updated_at >= %s",
             (cutoff,),
         )
         snapshots: list[dict[str, Any]] = []

@@ -57,7 +57,7 @@ class RequestTracer:
         INSERT INTO traces (
             trace_id, span_id, parent_span_id, operation_name, start_time,
             service_name, service_version, user_id, session_id, request_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
         params = (
@@ -79,8 +79,8 @@ class RequestTracer:
             else:
                 self.application_state.execute(sql, params)
             return span_id
-        except Exception as e:
-            logger.error(f"Failed to start trace: {e}")
+        except Exception:
+            logger.exception("Failed to start trace")
             return span_id
 
     def end_trace(
@@ -117,10 +117,12 @@ class RequestTracer:
         end_time = int(time.time() * 1000000)  # Microseconds
 
         # Calculate duration
-        read_sql = "SELECT start_time FROM traces WHERE trace_id = ? AND span_id = ?"
+        read_sql = "SELECT start_time FROM traces WHERE trace_id = %s AND span_id = %s"
         read_params = (trace_id, span_id)
         if _adapter is not None:
-            start_result = self.application_state.fetch_one_on(_adapter, read_sql, read_params)
+            start_result = self.application_state.fetch_one_on(
+                _adapter, read_sql, read_params
+            )
         else:
             start_result = self.application_state.fetch_one(read_sql, read_params)
 
@@ -134,10 +136,10 @@ class RequestTracer:
 
         sql = """
         UPDATE traces SET
-            end_time = ?, duration_ms = ?, status = ?, error_message = ?,
-            http_method = ?, http_url = ?, http_status_code = ?,
-            db_query = ?, db_duration_ms = ?, tags = ?
-        WHERE trace_id = ? AND span_id = ?
+            end_time = %s, duration_ms = %s, status = %s, error_message = %s,
+            http_method = %s, http_url = %s, http_status_code = %s,
+            db_query = %s, db_duration_ms = %s, tags = %s
+        WHERE trace_id = %s AND span_id = %s
         """
 
         params = (
@@ -160,8 +162,8 @@ class RequestTracer:
                 self.application_state.execute_on(_adapter, sql, params)
             else:
                 self.application_state.execute(sql, params)
-        except Exception as e:
-            logger.error(f"Failed to end trace: {e}")
+        except Exception:
+            logger.exception("Failed to end trace")
 
     def get_traces(
         self,
@@ -195,31 +197,31 @@ class RequestTracer:
         params = []
 
         if service_name:
-            conditions.append("service_name = ?")
+            conditions.append("service_name = %s")
             params.append(service_name)
 
         if operation_name:
-            conditions.append("operation_name = ?")
+            conditions.append("operation_name = %s")
             params.append(operation_name)
 
         if user_id:
-            conditions.append("user_id = ?")
+            conditions.append("user_id = %s")
             params.append(user_id)
 
         if request_id:
-            conditions.append("request_id = ?")
+            conditions.append("request_id = %s")
             params.append(request_id)
 
         if start_time:
-            conditions.append("start_time >= ?")
+            conditions.append("start_time >= %s")
             params.append(start_time * 1000000)  # Convert to microseconds
 
         if end_time:
-            conditions.append("start_time <= ?")
+            conditions.append("start_time <= %s")
             params.append(end_time * 1000000)  # Convert to microseconds
 
         if status:
-            conditions.append("status = ?")
+            conditions.append("status = %s")
             params.append(status)
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
@@ -228,7 +230,7 @@ class RequestTracer:
         SELECT * FROM traces
         WHERE {where_clause}
         ORDER BY start_time DESC
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
         """
 
         params.extend([limit, offset])
@@ -242,12 +244,18 @@ class RequestTracer:
                 if trace_dict.get("tags"):
                     try:
                         trace_dict["tags"] = json.loads(trace_dict["tags"])
-                    except:
+                    except (TypeError, ValueError):
+                        # Malformed/non-JSON stored value -- don't let
+                        # one bad row take down the whole listing.
+                        # Deliberately narrow: a bare `except:` here
+                        # would also swallow KeyboardInterrupt/
+                        # SystemExit and mask real bugs elsewhere in
+                        # this block.
                         trace_dict["tags"] = {}
                 else:
                     trace_dict["tags"] = {}
                 traces.append(trace_dict)
             return traces
-        except Exception as e:
-            logger.error(f"Failed to retrieve traces: {e}")
+        except Exception:
+            logger.exception("Failed to retrieve traces")
             return []

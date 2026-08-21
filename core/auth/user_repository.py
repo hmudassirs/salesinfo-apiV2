@@ -58,7 +58,7 @@ class UserRepository:
 
         sql = """
         INSERT INTO users (user_id, username, email, password_hash, roles, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, true, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, true, %s, %s)
         """
         try:
             self.application_state.execute(
@@ -71,7 +71,7 @@ class UserRepository:
                 raise DuplicateRecordError(
                     f"User '{username}' already exists"
                 ) from e
-            logger.error(f"Failed to create user: {e}")
+            logger.exception("Failed to create user")
             raise DatabaseUnavailableError("Failed to create user") from e
 
     def get_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
@@ -86,12 +86,12 @@ class UserRepository:
         Raises:
             DatabaseUnavailableError: on a query failure.
         """
-        sql = "SELECT * FROM users WHERE user_id = ?"
+        sql = "SELECT * FROM users WHERE user_id = %s"
         try:
             result = self.application_state.fetch_one(sql, (user_id,))
             return dict(result) if result else None
         except Exception as e:
-            logger.error(f"Failed to get user by ID: {e}")
+            logger.exception("Failed to get user by ID")
             raise DatabaseUnavailableError("Failed to get user by ID") from e
 
     def get_by_username(self, username: str) -> Optional[Dict[str, Any]]:
@@ -106,12 +106,12 @@ class UserRepository:
         Raises:
             DatabaseUnavailableError: on a query failure.
         """
-        sql = "SELECT * FROM users WHERE username = ?"
+        sql = "SELECT * FROM users WHERE username = %s"
         try:
             result = self.application_state.fetch_one(sql, (username,))
             return dict(result) if result else None
         except Exception as e:
-            logger.error(f"Failed to get user by username: {e}")
+            logger.exception("Failed to get user by username")
             raise DatabaseUnavailableError("Failed to get user by username") from e
 
     def update_role(self, user_id: str, role: str) -> bool:
@@ -127,12 +127,12 @@ class UserRepository:
         Raises:
             DatabaseUnavailableError: on an execute failure.
         """
-        sql = "UPDATE users SET roles = ?, updated_at = ? WHERE user_id = ?"
+        sql = "UPDATE users SET roles = %s, updated_at = %s WHERE user_id = %s"
         try:
             self.application_state.execute(sql, (role, int(time.time()), user_id))
             return True
         except Exception as e:
-            logger.error(f"Failed to update user role: {e}")
+            logger.exception("Failed to update user role")
             raise DatabaseUnavailableError("Failed to update user role") from e
 
     def delete(self, user_id: str) -> bool:
@@ -147,12 +147,12 @@ class UserRepository:
         Raises:
             DatabaseUnavailableError: on an execute failure.
         """
-        sql = "DELETE FROM users WHERE user_id = ?"
+        sql = "DELETE FROM users WHERE user_id = %s"
         try:
             self.application_state.execute(sql, (user_id,))
             return True
         except Exception as e:
-            logger.error(f"Failed to delete user: {e}")
+            logger.exception("Failed to delete user")
             raise DatabaseUnavailableError("Failed to delete user") from e
 
     def update_last_login(self, user_id: str) -> bool:
@@ -168,14 +168,14 @@ class UserRepository:
             DatabaseUnavailableError: on an execute failure.
         """
         sql = (
-            "UPDATE users SET last_login_at = ?, "
-            "login_count = COALESCE(login_count, 0) + 1 WHERE user_id = ?"
+            "UPDATE users SET last_login_at = %s, "
+            "login_count = COALESCE(login_count, 0) + 1 WHERE user_id = %s"
         )
         try:
             self.application_state.execute(sql, (int(time.time()), user_id))
             return True
         except Exception as e:
-            logger.error(f"Failed to update last login: {e}")
+            logger.exception("Failed to update last login")
             raise DatabaseUnavailableError("Failed to update last login") from e
 
     def list_all(self) -> List[Dict[str, Any]]:
@@ -192,5 +192,5 @@ class UserRepository:
             results = self.application_state.fetch_all(sql)
             return [dict(row) for row in results]
         except Exception as e:
-            logger.error(f"Failed to list users: {e}")
+            logger.exception("Failed to list users")
             raise DatabaseUnavailableError("Failed to list users") from e

@@ -14,7 +14,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.security import APIKeyHeader
 from fastapi.responses import ORJSONResponse
 
-from core.app.api.routes import auth_router, router
+from core.app.api.routes import auth_router, probes_router, router
 from core.app.settings import AppSettings
 from core.auth.dependencies import require_admin_user
 from core.auth.middleware import install_auth_middleware
@@ -123,7 +123,7 @@ def create_app(
     # and (depending on what the ambient OTEL_* env vars/global provider
     # looked like) could still produce exporter connection-retry log spam
     # that the flag was supposed to silence.
-    from core.observability.otel import _env_flag as _otel_env_flag
+    from core.config_env import env_flag as _otel_env_flag
 
     if _otel_env_flag("OTEL_SDK_DISABLED", default=False):
         import logging
@@ -191,6 +191,14 @@ def create_app(
     # Include routers
     app.include_router(router)
     app.include_router(auth_router)
+    # Unauthenticated liveness/readiness probes for orchestrators (k8s/
+    # ECS/etc.) that can't attach an API key -- deliberately mounted
+    # bare (no /api or /debug prefix) so core.auth.middleware's
+    # path-prefix check never intercepts them. See probes.py's
+    # docstring for why these are two endpoints, not one, and why they
+    # return the bare minimum rather than reusing GET /api/health's
+    # rich metrics payload.
+    app.include_router(probes_router)
 
     # Read-only live performance dashboard (throughput/latency, pool
     # contention, SQL timing, CPU/memory, request traces — see

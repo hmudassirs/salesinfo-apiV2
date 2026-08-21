@@ -3,7 +3,7 @@ one fleet-wide view.
 
 Each dict in `snapshots` is exactly what `summary.build_performance_summary`
 returns for one worker process (see that module), collected back via
-`core.performance.cross_process.WorkerSnapshotStore.collect_fresh`. This
+`core.performance.adapters.cross_process.WorkerSnapshotStore.collect_fresh`. This
 module has no dependency on Postgres, FastAPI, or the registry itself --
 it only combines already-serialized dicts -- so it's directly unit
 testable the same way `summary.py` is kept separate from `fastapi.py`.

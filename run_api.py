@@ -31,7 +31,6 @@ not a startup-time failure.
 
 import asyncio
 import concurrent.futures
-import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -92,45 +91,45 @@ _DEFAULT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 # `set_default_executor`, needs `asyncio.get_running_loop()` and is done
 # inside `lifespan()` below instead, where a loop is guaranteed to be
 # running.
+#
+# This file is the composition root: `AppSettings.from_env()` is the
+# *only* place environment variables are read for runtime
+# configuration. Everything below (DB connection, pool sizes, executor
+# sizes) is built from the resulting `settings` object, not from a
+# second, parallel set of `os.getenv()` calls -- that duplication (one
+# tree in AppSettings, a second ad hoc one here) was flagged as the
+# biggest remaining consistency problem in the framework review. Pool/
+# executor defaults are still ultimately derived from the actual CPU
+# count available to this process (core/concurrency/cpu.py) -- that
+# derivation now happens once, inside `AppSettings.from_env()`, rather
+# than being duplicated here.
+settings = AppSettings.from_env()
 
-# Pool/executor sizes are derived from the actual CPU count available
-# to this process (core/concurrency/cpu.py) rather than hardcoded --
-# this used to be a flat `PoolSettings(min_size=2, max_size=10)`
-# picked for whatever machine last ran the load test, which either
-# starves a bigger box or oversubscribes a smaller one. Each
-# individual number can still be overridden with an env var (e.g. for
-# a production deployment that's benchmarked its own optimal size);
-# what's dynamic is the *default* when nothing more specific is set.
 sizing = recommended_sizing()
 print(
     f"🧮 Detected {sizing.cpu_count} usable CPU(s) -- deriving pool/executor "
     f"sizes from that (override with env vars to pin explicit values)"
 )
 
-pool_min = int(os.getenv("APPLICATION_DATA_POOL_MIN_SIZE", str(sizing.application_data_pool_min)))
-pool_max = int(os.getenv("APPLICATION_DATA_POOL_MAX_SIZE", str(sizing.application_data_pool_max)))
-pool_config = PoolSettings(min_size=pool_min, max_size=pool_max, timeout=30)
+pool_config = PoolSettings(
+    min_size=settings.pool.application_data_min_size,
+    max_size=settings.pool.application_data_max_size,
+    timeout=settings.pool.timeout,
+)
 db_settings = DatabaseSettings(pool=pool_config)
 
 db_config = DatabaseConfig.from_postgresql(
-    dsn=os.getenv("DATABASE_URL"),
-    host=os.getenv("PGHOST", "localhost"),
-    port=int(os.getenv("PGPORT", "5432")),
-    database=os.getenv("PGDATABASE", "postgres"),
-    user=os.getenv("PGUSER", "postgres"),
-    password=os.getenv("PGPASSWORD", ""),
-    sslmode=os.getenv("PGSSLMODE"),
+    dsn=settings.database.dsn,
+    host=settings.database.host,
+    port=settings.database.port,
+    database=settings.database.database,
+    user=settings.database.user,
+    password=settings.database.password,
+    sslmode=settings.database.sslmode,
     settings=db_settings,
 )
 print(f"🐘 Database: PostgreSQL ({db_config.connection_string})")
 print("🗄️  Application data and application state tables (users, API keys, logs, traces, cache, audit) share this one database")
-
-state_pool_min = int(
-    os.getenv("APPLICATION_STATE_POOL_MIN_SIZE", str(sizing.state_pool_min))
-)
-state_pool_max = int(
-    os.getenv("APPLICATION_STATE_POOL_MAX_SIZE", str(sizing.state_pool_max))
-)
 
 # Size the DB/state executors off the *actual* pool configuration
 # above, plus a little headroom for in-flight reservation
@@ -138,41 +137,29 @@ state_pool_max = int(
 # there are connections for them to use. `state_workers` covers
 # ApplicationStateStore's own pool (see core/storage/application_state_store.py).
 configure_executors(
-    application_data_workers=int(os.getenv("APPLICATION_DATA_EXECUTOR_WORKERS", str(pool_max + 2))),
-    state_workers=int(
-        os.getenv("APPLICATION_STATE_EXECUTOR_WORKERS", str(state_pool_max + 2))
-    ),
-    background_workers=int(
-        os.getenv(
-            "BACKGROUND_EXECUTOR_WORKERS",
-            str(sizing.background_executor_workers),
-        )
-    ),
+    application_data_workers=settings.executors.application_data_workers,
+    state_workers=settings.executors.application_state_workers,
+    background_workers=settings.executors.background_workers,
     # CPU-bound, not pool-backed -- see core/concurrency/cpu.py's
     # password_executor_workers docstring for why this isn't derived
-    # from state_pool_max the way application_state_workers is.
-    password_workers=int(
-        os.getenv(
-            "PASSWORD_EXECUTOR_WORKERS",
-            str(sizing.password_executor_workers),
-        )
-    ),
+    # from state pool size the way application_state_workers is.
+    password_workers=settings.executors.password_workers,
 )
 
-# Create lifespan manager (async mode for pooled database access)
+# Create lifespan manager (async mode for pooled database access).
 #
-# One AppSettings instance for the whole process, built here and
-# threaded into both ApplicationLifespan (so ApplicationServices can
-# build authentication_service with the real JWT settings at startup
-# -- see ApplicationStateStep's docstring) and create_app() below --
-# rather than each independently calling AppSettings.from_env() and
-# ending up with two separately-parsed copies of the same environment.
-settings = AppSettings.from_env()
+# `settings` (built once, above) is threaded into both
+# ApplicationLifespan (so ApplicationServices can build
+# authentication_service with the real JWT settings at startup -- see
+# ApplicationStateStep's docstring) and create_app() below -- one
+# AppSettings instance for the whole process, rather than each
+# independently calling AppSettings.from_env() and ending up with two
+# separately-parsed copies of the same environment.
 lifespan_mgr = ApplicationLifespan(
     db_config,
     mode="async",
-    state_pool_min_size=state_pool_min,
-    state_pool_max_size=state_pool_max,
+    state_pool_min_size=settings.pool.application_state_min_size,
+    state_pool_max_size=settings.pool.application_state_max_size,
     settings=settings,
 )
 
@@ -184,10 +171,16 @@ lifespan_mgr = ApplicationLifespan(
 # would silently put this server back in sync mode — and the DB
 # pool mismatch wouldn't surface until the first request that
 # touches the database. Fail here, at import time, instead of there.
-assert lifespan_mgr.mode == "async", (
-    "run_api.py's routes require ApplicationLifespan(mode='async'); "
-    f"got mode={lifespan_mgr.mode!r}"
-)
+if lifespan_mgr.mode != "async":
+    # A plain `assert` here is a production invariant, not a debug
+    # check -- `python -O` (or PYTHONOPTIMIZE) strips asserts, which
+    # would silently let this run in sync mode instead of failing at
+    # import time. Use an explicit exception instead so this can never
+    # be optimized away.
+    raise RuntimeError(
+        "run_api.py's routes require ApplicationLifespan(mode='async'); "
+        f"got mode={lifespan_mgr.mode!r}"
+    )
 
 
 @asynccontextmanager
@@ -225,6 +218,8 @@ async def lifespan(app: FastAPI):
     print("📚 API Docs: http://localhost:8000/docs")
     print("🔍 ReDoc: http://localhost:8000/redoc")
     print("🔑 API Keys: http://localhost:8000/docs#/authentication")
+    print("💓 Liveness: http://localhost:8000/live  (unauthenticated)")
+    print("✅ Readiness: http://localhost:8000/ready  (unauthenticated)")
     print("=" * 60 + "\n")
 
     yield

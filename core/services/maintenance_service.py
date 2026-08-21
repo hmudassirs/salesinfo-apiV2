@@ -56,14 +56,14 @@ class ApplicationMaintenanceService:
             # Clean up old logs (keep last 30 days)
             thirty_days_ago = int(time.time()) - _THIRTY_DAYS_SECONDS
             old_logs_result = self.application_state.execute(
-                "DELETE FROM logs WHERE timestamp < ?", (thirty_days_ago,)
+                "DELETE FROM logs WHERE timestamp < %s", (thirty_days_ago,)
             )
             old_logs_count = old_logs_result.rowcount
 
             # Clean up old traces (keep last 7 days)
             seven_days_ago = int(time.time()) - _SEVEN_DAYS_SECONDS
             old_traces_result = self.application_state.execute(
-                "DELETE FROM traces WHERE start_time < ?",
+                "DELETE FROM traces WHERE start_time < %s",
                 (seven_days_ago * 1000000,),  # Convert to microseconds
             )
             old_traces_count = old_traces_result.rowcount
@@ -71,16 +71,13 @@ class ApplicationMaintenanceService:
             # Vacuum database to reclaim space
             self.application_state.execute("VACUUM")
 
-            logger.info(
-                f"Maintenance cleanup: {expired_cache} expired cache, "
-                f"{old_logs_count} old logs, {old_traces_count} old traces"
-            )
+            logger.info("Maintenance cleanup: %s expired cache, %s old logs, %s old traces", expired_cache, old_logs_count, old_traces_count)
 
             return {
                 "expired_cache": expired_cache,
                 "old_logs": old_logs_count,
                 "old_traces": old_traces_count,
             }
-        except Exception as e:
-            logger.error(f"Maintenance cleanup failed: {e}")
+        except Exception:
+            logger.exception("Maintenance cleanup failed")
             return {}

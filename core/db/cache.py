@@ -1,4 +1,15 @@
-"""Query result caching with LRU and TTL strategies."""
+"""Query result caching strategies: LRU, TTL, and a combined LRU+TTL
+policy in a single backing store.
+
+**Which one is actually used in production:** `HybridQueryCache`, as
+the L1 (in-process) layer inside
+`core.caching.query_cache_coordinator.QueryCacheCoordinator` -- see
+that module's docstring for the full L1/L2/single-flight picture.
+`LRUQueryCache`/`TTLQueryCache` are its building blocks (and are
+individually correct, complete cache implementations you could use
+directly), but as of this writing nothing in this codebase does --
+`HybridQueryCache` is the only one with a real caller.
+"""
 
 import time
 from abc import ABC, abstractmethod
@@ -158,10 +169,10 @@ class LRUQueryCache(QueryCache):
             # Remove least recently used (first item)
             removed_key = next(iter(self.cache))
             del self.cache[removed_key]
-            logger.debug(f"Evicted LRU entry: {removed_key}")
+            logger.debug("Evicted LRU entry: %s", removed_key)
 
         self.cache[key] = CacheEntry(value, ttl)
-        logger.debug(f"Cached query: {key}")
+        logger.debug("Cached query: %s", key)
 
     def invalidate(self, key: str) -> None:
         """Invalidate cache entry.
@@ -171,7 +182,7 @@ class LRUQueryCache(QueryCache):
         """
         if key in self.cache:
             del self.cache[key]
-            logger.debug(f"Invalidated cache: {key}")
+            logger.debug("Invalidated cache: %s", key)
 
     def clear(self) -> None:
         """Clear entire cache."""
@@ -240,7 +251,7 @@ class TTLQueryCache(QueryCache):
         if entry.is_expired():
             del self.cache[key]
             self.misses += 1
-            logger.debug(f"Cache entry expired: {key}")
+            logger.debug("Cache entry expired: %s", key)
             return None
 
         entry.record_access()
@@ -264,11 +275,11 @@ class TTLQueryCache(QueryCache):
                 ),
             )
             del self.cache[earliest_key]
-            logger.debug(f"Evicted TTL entry: {earliest_key}")
+            logger.debug("Evicted TTL entry: %s", earliest_key)
 
         ttl_seconds = ttl or self.default_ttl
         self.cache[key] = CacheEntry(value, ttl_seconds)
-        logger.debug(f"Cached query with TTL {ttl_seconds}s: {key}")
+        logger.debug("Cached query with TTL %ss: %s", ttl_seconds, key)
 
     def invalidate(self, key: str) -> None:
         """Invalidate cache entry.
@@ -278,7 +289,7 @@ class TTLQueryCache(QueryCache):
         """
         if key in self.cache:
             del self.cache[key]
-            logger.debug(f"Invalidated cache: {key}")
+            logger.debug("Invalidated cache: %s", key)
 
     def clear(self) -> None:
         """Clear entire cache."""
@@ -316,20 +327,36 @@ class TTLQueryCache(QueryCache):
 
 
 class HybridQueryCache(QueryCache):
-    """Hybrid cache combining LRU and TTL strategies."""
+    """LRU eviction (bounded size) plus per-entry TTL expiry, in one
+    backing store.
+
+    Earlier versions of this class composed a *second*, independent
+    `TTLQueryCache` alongside the `LRUQueryCache` and wrote every
+    `put()` into both -- doubling memory for every cached entry and
+    doubling the work on every `get()`, for zero behavioral benefit:
+    `LRUQueryCache` already expires entries via
+    `CacheEntry.is_expired()`, so the second store's own TTL tracking
+    was redundant with the first, and `get()` only ever read values
+    from the LRU side anyway (the TTL side's `.get()` result was
+    computed and discarded, just to trigger its own independent
+    eviction of a copy nothing read from). There is exactly one
+    strategy here now: `LRUQueryCache`, which already provides both
+    eviction under memory pressure (LRU) and per-entry expiry (TTL).
+    """
 
     def __init__(self, max_size: int = 256, default_ttl: int = 3600):
         """Initialize hybrid cache.
 
         Args:
             max_size: Maximum number of entries
-            default_ttl: Default time-to-live in seconds
+            default_ttl: Default time-to-live in seconds, applied
+                whenever `put()` is called without an explicit `ttl`.
         """
-        self.lru = LRUQueryCache(max_size)
-        self.ttl = TTLQueryCache(max_size, default_ttl)
+        self._store = LRUQueryCache(max_size)
+        self.default_ttl = default_ttl
 
     def get(self, key: str) -> Optional[Any]:
-        """Get value from cache using both strategies.
+        """Get value from cache.
 
         Args:
             key: Cache key
@@ -337,36 +364,34 @@ class HybridQueryCache(QueryCache):
         Returns:
             Cached value or None
         """
-        value = self.lru.get(key)
-        if value is not None:
-            self.ttl.get(key)  # Also check TTL
-            return value
-        return None
+        return self._store.get(key)
 
     def put(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
-        """Put value in both caches.
+        """Put value in the cache.
 
         Args:
             key: Cache key
             value: Value to cache
-            ttl: Time-to-live in seconds
+            ttl: Time-to-live in seconds; falls back to this
+                instance's `default_ttl` when omitted (unlike
+                `LRUQueryCache.put()`, which treats an omitted `ttl`
+                as "never expires" -- see this class's docstring for
+                why an earlier version of this class needed every
+                caller to pass `ttl` explicitly to avoid that).
         """
-        self.lru.put(key, value, ttl)
-        self.ttl.put(key, value, ttl)
+        self._store.put(key, value, ttl if ttl is not None else self.default_ttl)
 
     def invalidate(self, key: str) -> None:
-        """Invalidate in both caches.
+        """Invalidate a cache entry.
 
         Args:
             key: Cache key
         """
-        self.lru.invalidate(key)
-        self.ttl.invalidate(key)
+        self._store.invalidate(key)
 
     def clear(self) -> None:
-        """Clear both caches."""
-        self.lru.clear()
-        self.ttl.clear()
+        """Clear the cache."""
+        self._store.clear()
 
     def size(self) -> int:
         """Get cache size.
@@ -374,20 +399,18 @@ class HybridQueryCache(QueryCache):
         Returns:
             Number of entries
         """
-        return self.lru.size()
+        return self._store.size()
 
     def stats(self) -> dict[str, Any]:
         """Get cache statistics.
 
         Returns:
-            Combined statistics
+            Statistics dictionary
         """
-        return {
-            "strategy": "HYBRID",
-            "lru": self.lru.stats(),
-            "ttl": self.ttl.stats(),
-            "combined_size": self.size(),
-        }
+        stats = dict(self._store.stats())
+        stats["strategy"] = "HYBRID"
+        stats["default_ttl"] = self.default_ttl
+        return stats
 
 
 def query_cache(

@@ -26,7 +26,11 @@ from core.db.logger import get_logger
 from core.observability.alerts import get_alert_evaluator
 from core.db.session import DatabaseSession
 from core.services.query_limits import query_concurrency_metrics
-from core.services.query_service import QueryAuthorizationError, QueryService
+from core.services.query_service import (
+    QueryAuthorizationError,
+    QueryService,
+    QueryTimeoutError,
+)
 
 logger = get_logger(__name__)
 
@@ -281,8 +285,24 @@ async def execute_query(
 
     Returns:
         QueryResponse with results or error
+
+    Error handling policy (framework review item "API error handling:
+    information disclosure"): this is a database-console endpoint, so
+    failures can carry PostgreSQL table/column names, constraint
+    names, SQL fragments, or other schema/internal detail in `str(e)`.
+    None of that goes to the client. `QueryAuthorizationError` and
+    `QueryTimeoutError` raise fixed, non-parameterized messages that
+    reveal nothing beyond "you're missing a scope" / "the configured
+    timeout was exceeded", so those are safe to return as-is. Every
+    other exception is logged in full server-side (message, type, and
+    stacktrace via `logger.exception`) against this request's
+    `request_id`, and the client gets only a generic message plus that
+    `request_id` to quote when asking for help -- never `str(e))`.
     """
-    build_request_context(request)
+    request_context = build_request_context(request)
+    request_id = request_context.get("request_id") or getattr(
+        request.state, "request_id", None
+    )
 
     params = tuple(query.params or [])
     settings: AppSettings = request.app.state.settings
@@ -301,12 +321,32 @@ async def execute_query(
             scopes=current_user.scopes,
         )
     except QueryAuthorizationError as e:
+        # Fixed, non-parameterized message (see core.services.query_service)
+        # -- names no table/column/SQL, safe to return verbatim.
         raise HTTPException(status_code=403, detail=str(e))
-    except Exception as e:
+    except QueryTimeoutError as e:
+        # Same reasoning: message only echoes the configured timeout
+        # value, not any query/schema detail.
         return QueryResponse(
             success=False,
             data=None,
             error=str(e),
+            request_id=request_id,
+            row_count=0,
+            cached=False,
+            truncated=False,
+        )
+    except Exception as e:
+        logger.exception(
+            "Unhandled error executing /api/query (request_id=%s, user_id=%s)",
+            request_id,
+            current_user.user_id,
+        )
+        return QueryResponse(
+            success=False,
+            data=None,
+            error="Query execution failed. See request_id in server logs for details.",
+            request_id=request_id,
             row_count=0,
             cached=False,
             truncated=False,
@@ -317,6 +357,7 @@ async def execute_query(
         data=outcome.data,
         row_count=len(outcome.data),
         error=None,
+        request_id=request_id,
         cached=outcome.cached,
         truncated=outcome.truncated,
     )

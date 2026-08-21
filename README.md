@@ -7,7 +7,7 @@ at `/api/health` and `/api/dashboard`).
 
 ## Requirements
 
-- Python >= 3.9
+- Python >= 3.10
 - [uv](https://docs.astral.sh/uv/) (dependencies are pinned in `uv.lock` /
   `requirements.txt`), or plain `pip install -e .`
 - A PostgreSQL server — `psycopg2-binary` is already in `requirements.txt`.

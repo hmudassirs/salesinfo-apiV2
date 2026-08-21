@@ -61,7 +61,7 @@ class APIKeyRepository:
         """
         sql = """
         INSERT INTO api_keys (key_id, api_key_hash, owner_id, created_at, expires_at, scopes, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         try:
             self.application_state.execute(
@@ -80,7 +80,7 @@ class APIKeyRepository:
         except Exception as e:
             if psycopg2_errors is not None and isinstance(e, psycopg2_errors.UniqueViolation):
                 raise DuplicateRecordError(f"API key '{key_id}' already exists") from e
-            logger.error(f"Failed to create API key: {e}")
+            logger.exception("Failed to create API key")
             raise DatabaseUnavailableError("Failed to create API key") from e
 
     def validate(
@@ -101,12 +101,12 @@ class APIKeyRepository:
         sql = """
         SELECT key_id, owner_id, created_at, expires_at, scopes, is_active
         FROM api_keys
-        WHERE api_key_hash = ? AND is_active = true
+        WHERE api_key_hash = %s AND is_active = true
         """
         try:
             result = self.application_state.fetch_one(sql, (api_key_hash,))
         except Exception as e:
-            logger.error(f"Failed to validate API key: {e}")
+            logger.exception("Failed to validate API key")
             raise DatabaseUnavailableError("Failed to validate API key") from e
 
         if not result:
@@ -116,7 +116,7 @@ class APIKeyRepository:
 
         # Check if key is expired
         if key_data.get("expires_at") and key_data["expires_at"] < current_time:
-            logger.warning(f"API key {key_data['key_id']} has expired")
+            logger.warning("API key %s has expired", key_data['key_id'])
             return None
 
         return key_data
@@ -136,14 +136,14 @@ class APIKeyRepository:
         sql = """
         SELECT key_id, owner_id, created_at, expires_at, scopes, is_active
         FROM api_keys
-        WHERE owner_id = ?
+        WHERE owner_id = %s
         ORDER BY created_at DESC
         """
         try:
             results = self.application_state.fetch_all(sql, (owner_id,))
             return [dict(row) for row in results]
         except Exception as e:
-            logger.error(f"Failed to list API keys: {e}")
+            logger.exception("Failed to list API keys")
             raise DatabaseUnavailableError("Failed to list API keys") from e
 
     def revoke(self, key_id: str, owner_id: str) -> bool:
@@ -159,12 +159,12 @@ class APIKeyRepository:
         Raises:
             DatabaseUnavailableError: on an execute failure.
         """
-        sql = "UPDATE api_keys SET is_active = false WHERE key_id = ? AND owner_id = ?"
+        sql = "UPDATE api_keys SET is_active = false WHERE key_id = %s AND owner_id = %s"
         try:
             self.application_state.execute(sql, (key_id, owner_id))
             return True
         except Exception as e:
-            logger.error(f"Failed to revoke API key: {e}")
+            logger.exception("Failed to revoke API key")
             raise DatabaseUnavailableError("Failed to revoke API key") from e
 
     def delete(self, key_id: str, owner_id: str) -> bool:
@@ -180,10 +180,10 @@ class APIKeyRepository:
         Raises:
             DatabaseUnavailableError: on an execute failure.
         """
-        sql = "DELETE FROM api_keys WHERE key_id = ? AND owner_id = ?"
+        sql = "DELETE FROM api_keys WHERE key_id = %s AND owner_id = %s"
         try:
             self.application_state.execute(sql, (key_id, owner_id))
             return True
         except Exception as e:
-            logger.error(f"Failed to delete API key: {e}")
+            logger.exception("Failed to delete API key")
             raise DatabaseUnavailableError("Failed to delete API key") from e

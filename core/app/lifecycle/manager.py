@@ -58,7 +58,8 @@ class ApplicationLifespan:
         mode: Literal["sync", "async"] = "sync",
         state_pool_min_size: Optional[int] = None,
         state_pool_max_size: Optional[int] = None,
-        settings: Optional[AppSettings] = None,
+        *,
+        settings: AppSettings,
     ):
         """Initialize application lifespan.
 
@@ -76,18 +77,26 @@ class ApplicationLifespan:
                 count instead of a constant picked for one machine.
             state_pool_max_size: Application-state pool ceiling; same
                 default behavior as `state_pool_min_size`.
-            settings: AppSettings, threaded through to ApplicationStateStep
-                so ApplicationServices can build `authentication_service`
-                (JWT secret/algorithm/expiry) once at startup instead of
-                per-request -- see ApplicationServices.__init__'s
-                docstring. Falls back to `AppSettings.from_env()` when
-                not given, same as `core.app.api.app.create_app`. Pass
-                the *same* instance to both `ApplicationLifespan(...)`
-                and `create_app(settings=...)` (see run_api.py) so
+            settings: AppSettings, threaded through to PerformanceStep
+                and ApplicationStateStep so they can build
+                `authentication_service` (JWT secret/algorithm/expiry)
+                and read maintenance/OTel/cross-process-publish
+                intervals from one resolved settings object instead of
+                each independently falling back to `os.getenv()` --
+                see those two steps' constructors and the framework
+                review's "eliminate lifecycle/configuration fallbacks"
+                item. Required (not Optional) for the same reason:
+                callers construct `AppSettings.from_env()` (or, in
+                tests, an explicit `AppSettings(...)`) themselves and
+                pass the *same* instance to both `ApplicationLifespan(...)`
+                and `create_app(settings=...)` (see run_api.py), so
                 there's one settings object for the whole process, not
-                two independently-parsed-from-env copies.
+                two independently-parsed-from-env copies -- and, now,
+                exactly one place (`AppSettings.from_env()`) that ever
+                reads the environment at all.
         """
         self.mode = mode
+        self.settings = settings
         self.container = ApplicationContainer()
 
         if state_pool_min_size is None or state_pool_max_size is None:
@@ -122,18 +131,27 @@ class ApplicationLifespan:
         # else needs to change.
         #
         # Order here is start order; shutdown runs in reverse. That
-        # reversal is what gives the roadmap's required shutdown
-        # sequence "drain persistence queue -> close application state
-        # store -> close executors -> close main application data pool"
-        # just from listing steps in the opposite sequence:
-        # ApplicationDataStep (owns the main pool) starts first so it
-        # closes *last*; PersistenceQueueStep starts last so it drains
-        # *first*, while ApplicationStateStore and the executors it
-        # depends on are still up.
+        # reversal is what gives the required shutdown sequence "drain
+        # persistence queue -> close application state store -> close
+        # main application data pool -> close executors" just from
+        # listing steps in the opposite sequence: ExecutorsStep starts
+        # first so it closes *last* -- both ApplicationDataStep.close()
+        # and ApplicationStateStep's maintenance loop dispatch their
+        # actual blocking work through
+        # core.concurrency.executors.run_in_application_data_executor /
+        # run_in_state_executor, so the executors must still be alive
+        # when those steps shut down, or the dispatch raises
+        # `RuntimeError: cannot schedule new futures after shutdown`
+        # (see core/concurrency/executors.py's _TrackedExecutor.run).
+        # ApplicationDataStep (owns the main pool) starts right after
+        # ExecutorsStep so it closes second-to-last, just before the
+        # executors themselves; PersistenceQueueStep starts last so it
+        # drains *first*, while the application state store and the
+        # executors it depends on are still up.
         self._steps: List[LifecycleStep] = [
-            PerformanceStep(self.container),
-            ApplicationDataStep(db_config),
+            PerformanceStep(self.container, settings=settings),
             ExecutorsStep(),
+            ApplicationDataStep(db_config),
             ApplicationStateStep(
                 db_config,
                 settings=settings,
@@ -162,8 +180,8 @@ class ApplicationLifespan:
                 self._register(registrations)
                 self._started_steps.append(step)
             logger.info("Application startup completed")
-        except Exception as e:
-            logger.error(f"Application startup failed: {e}")
+        except Exception:
+            logger.exception("Application startup failed")
             raise
 
     def shutdown_sync(self) -> None:
@@ -174,8 +192,8 @@ class ApplicationLifespan:
             self._started_steps.clear()
             self.container.clear()
             logger.info("Application shutdown completed")
-        except Exception as e:
-            logger.error(f"Application shutdown failed: {e}")
+        except Exception:
+            logger.exception("Application shutdown failed")
             raise
 
     # ============= ASYNC LIFECYCLE =============
@@ -192,8 +210,8 @@ class ApplicationLifespan:
                 self._register(registrations)
                 self._started_steps.append(step)
             logger.info("Application startup completed")
-        except Exception as e:
-            logger.error(f"Application startup failed: {e}")
+        except Exception:
+            logger.exception("Application startup failed")
             raise
 
     async def shutdown_async(self) -> None:
@@ -204,8 +222,8 @@ class ApplicationLifespan:
             self._started_steps.clear()
             self.container.clear()
             logger.info("Application shutdown completed")
-        except Exception as e:
-            logger.error(f"Application shutdown failed: {e}")
+        except Exception:
+            logger.exception("Application shutdown failed")
             raise
 
     @asynccontextmanager
@@ -213,7 +231,7 @@ class ApplicationLifespan:
         """FastAPI lifespan context manager for proper lifecycle management.
 
         Usage with FastAPI:
-            lifespan = ApplicationLifespan(db_config, mode="sync")
+            lifespan = ApplicationLifespan(db_config, mode="sync", settings=settings)
 
             @asynccontextmanager
             async def lifespan(app):
@@ -242,15 +260,13 @@ class ApplicationLifespan:
     def _register(self, registrations: Dict[str, Any]) -> None:
         """Register a step's outputs into the container.
 
-        This is the single place that knows how the container's API
-        works (e.g. that the db session has its own setter). Steps never
-        touch the container directly.
+        Every registration goes through `ApplicationContainer.register`
+        -- `db_session` is a declared field like any other (see
+        `ApplicationContainer`), so it needs no special-cased setter
+        here.
         """
         for key, value in registrations.items():
-            if key == "db_session":
-                self.container.set_database_session(value)
-            else:
-                self.container.register(key, value)
+            self.container.register(key, value)
 
     # ============= UTILITIES =============
 

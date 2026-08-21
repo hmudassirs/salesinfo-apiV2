@@ -22,7 +22,6 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from core.db.adapters.postgresql import translate_qmark_placeholders
 from core.db.logger import get_logger
 from core.db.pool import MaxConnectionsExceeded, SyncConnectionPool
 
@@ -102,9 +101,11 @@ class _ApplicationStateAdapter:
     that adapter's `execute()` returns already-fetched rows (built for
     the ad-hoc `/api/query` console endpoint), not a live cursor with
     `.rowcount`/`.lastrowid` -- the contract every `ApplicationStateStore`
-    method is written against. This reuses that adapter's `?`->`%s`
-    placeholder translation (`translate_qmark_placeholders`) so SQL
-    text reads identically in both places.
+    method is written against. SQL passed here is always written
+    directly against native psycopg2 `%s` placeholders -- unlike
+    `PostgreSQLAdapter`, this adapter never receives client-submitted
+    SQL text, so there is nothing here that benefits from accepting a
+    backend-neutral `?` convention. See `execute()` below.
 
     Connects with `autocommit=True`: `ApplicationStateStore` pools connections
     and reuses them across many short, independent calls (one API
@@ -135,13 +136,7 @@ class _ApplicationStateAdapter:
         )
         self.connection.autocommit = True
         self.connection.cursor_factory = psycopg2.extras.RealDictCursor
-        logger.info(
-            "Connected to application state store: "
-            f"{self._connect_kwargs.get('user', '?')}"
-            f"@{self._connect_kwargs.get('host', '?')}:"
-            f"{self._connect_kwargs.get('port', '?')}/"
-            f"{self._connect_kwargs.get('database', '?')}"
-        )
+        logger.info("Connected to application state store: %s@%s:%s/%s", self._connect_kwargs.get('user', '?'), self._connect_kwargs.get('host', '?'), self._connect_kwargs.get('port', '?'), self._connect_kwargs.get('database', '?'))
 
     def disconnect(self) -> None:
         if self.connection:
@@ -149,8 +144,10 @@ class _ApplicationStateAdapter:
             logger.info("Disconnected from application state store")
 
     def execute(self, sql: str, params: tuple = ()) -> _CursorResult:
+        """Run `sql` (native `%s`-placeholder syntax -- see this
+        class's docstring) against the pooled connection."""
         cursor = self.connection.cursor()
-        cursor.execute(translate_qmark_placeholders(sql), params)
+        cursor.execute(sql, params)
         return _CursorResult(cursor)
 
 
@@ -261,10 +258,7 @@ class ApplicationStateStore:
         host = self._connect_kwargs.get("host", "?")
         port = self._connect_kwargs.get("port", "?")
         database = self._connect_kwargs.get("database", "?")
-        logger.info(
-            f"Connected to application state store: postgresql://{host}:{port}/{database} "
-            f"(pool min={self.min_size}, max={self.max_size})"
-        )
+        logger.info("Connected to application state store: postgresql://%s:%s/%s (pool min=%s, max=%s)", host, port, database, self.min_size, self.max_size)
 
     def disconnect(self) -> None:
         """Close every pooled connection."""
@@ -414,8 +408,8 @@ class ApplicationStateStore:
                 return ExecuteResult(
                     lastrowid=cursor.lastrowid, rowcount=cursor.rowcount
                 )
-            except Exception as e:
-                logger.error(f"Application state store query failed: {e}")
+            except Exception:
+                logger.exception("Application state store query failed")
                 raise
 
     def fetch_one(self, sql: str, params: tuple = ()):
@@ -437,8 +431,8 @@ class ApplicationStateStore:
             try:
                 cursor = adapter.execute(sql, params)
                 return cursor.fetchone()
-            except Exception as e:
-                logger.error(f"Application state store query failed: {e}")
+            except Exception:
+                logger.exception("Application state store query failed")
                 raise
 
     def fetch_all(self, sql: str, params: tuple = ()):
@@ -455,8 +449,8 @@ class ApplicationStateStore:
             try:
                 cursor = adapter.execute(sql, params)
                 return cursor.fetchall()
-            except Exception as e:
-                logger.error(f"Application state store query failed: {e}")
+            except Exception:
+                logger.exception("Application state store query failed")
                 raise
 
     # create_tables()/initialize_admin_user()/cleanup_expired_cache()

@@ -78,14 +78,14 @@ class QueryResultCache:
 
         sql = """
         SELECT * FROM query_cache
-        WHERE cache_key = ? AND (expires_at IS NULL OR expires_at > ?)
+        WHERE cache_key = %s AND (expires_at IS NULL OR expires_at > %s)
         """
 
         try:
             result = self.application_state.fetch_one(sql, (cache_key, current_time))
             return dict(result) if result else None
-        except Exception as e:
-            logger.error(f"Failed to get cached result: {e}")
+        except Exception:
+            logger.exception("Failed to get cached result")
             return None
 
     def record_access(self, cache_key: str) -> None:
@@ -96,11 +96,11 @@ class QueryResultCache:
         try:
             current_time = int(time.time())
             self.application_state.execute(
-                "UPDATE query_cache SET last_accessed_at = ?, access_count = access_count + 1 WHERE cache_key = ?",
+                "UPDATE query_cache SET last_accessed_at = %s, access_count = access_count + 1 WHERE cache_key = %s",
                 (current_time, cache_key),
             )
-        except Exception as e:
-            logger.error(f"Failed to record cache access: {e}")
+        except Exception:
+            logger.exception("Failed to record cache access")
 
     def cache_result(
         self,
@@ -139,16 +139,14 @@ class QueryResultCache:
         result_json = json.dumps(result_data, default=_json_default)
         result_size = len(result_json.encode())
 
-        # ON CONFLICT ... DO UPDATE (not SQLite's `INSERT OR REPLACE`,
-        # which PostgreSQL doesn't have) so this upsert works unmodified
-        # against either application-state-store backend -- see
-        # core.storage.application_state_store's module docstring. Supported by
-        # SQLite since 3.24 (2018) and PostgreSQL since 9.5.
+        # ON CONFLICT ... DO UPDATE (Postgres's upsert syntax) so a
+        # cache write for an existing key updates in place instead of
+        # erroring on the `cache_key` unique constraint.
         sql = """
         INSERT INTO query_cache (
             cache_key, query_hash, query_sql, result_data, result_count,
             created_at, expires_at, user_id, session_id, execution_time_ms, result_size_bytes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (cache_key) DO UPDATE SET
             query_hash = EXCLUDED.query_hash,
             query_sql = EXCLUDED.query_sql,
@@ -180,8 +178,8 @@ class QueryResultCache:
                 ),
             )
             return cache_key
-        except Exception as e:
-            logger.error(f"Failed to cache result: {e}")
+        except Exception:
+            logger.exception("Failed to cache result")
             return cache_key
 
     def clear_all(self) -> int:
@@ -199,10 +197,13 @@ class QueryResultCache:
         try:
             result = self.application_state.execute("DELETE FROM query_cache", ())
             deleted_count = result.rowcount
-            logger.info(f"Cleared entire query cache ({deleted_count} entries) after a write statement")
+            logger.info(
+                "Cleared entire query cache (%s entries) after a write statement",
+                deleted_count,
+            )
             return deleted_count
-        except Exception as e:
-            logger.error(f"Failed to clear cache: {e}")
+        except Exception:
+            logger.exception("Failed to clear cache")
             return 0
 
     def invalidate_cache(self, query_pattern: str = "", user_id: str = "") -> int:
@@ -219,11 +220,11 @@ class QueryResultCache:
         params = []
 
         if query_pattern:
-            conditions.append("query_sql LIKE ?")
+            conditions.append("query_sql LIKE %s")
             params.append(f"%{query_pattern}%")
 
         if user_id:
-            conditions.append("user_id = ?")
+            conditions.append("user_id = %s")
             params.append(user_id)
 
         if not conditions:
@@ -236,10 +237,10 @@ class QueryResultCache:
         try:
             result = self.application_state.execute(sql, tuple(params))
             deleted_count = result.rowcount
-            logger.info(f"Invalidated {deleted_count} cache entries")
+            logger.info("Invalidated %s cache entries", deleted_count)
             return deleted_count
-        except Exception as e:
-            logger.error(f"Failed to invalidate cache: {e}")
+        except Exception:
+            logger.exception("Failed to invalidate cache")
             return 0
 
     def get_cache_stats(self) -> Dict[str, Any]:
@@ -250,13 +251,15 @@ class QueryResultCache:
         """
         try:
             # Total entries
-            total_result = self.application_state.fetch_one("SELECT COUNT(*) FROM query_cache")
+            total_result = self.application_state.fetch_one(
+                "SELECT COUNT(*) FROM query_cache"
+            )
             total_entries = total_result[0] if total_result else 0
 
             # Active entries (not expired)
             current_time = int(time.time())
             active_result = self.application_state.fetch_one(
-                "SELECT COUNT(*) FROM query_cache WHERE expires_at IS NULL OR expires_at > ?",
+                "SELECT COUNT(*) FROM query_cache WHERE expires_at IS NULL OR expires_at > %s",
                 (current_time,),
             )
             active_entries = active_result[0] if active_result else 0
@@ -281,6 +284,6 @@ class QueryResultCache:
                 "total_access_count": total_hits,
                 "average_size_bytes": total_size // max(total_entries, 1),
             }
-        except Exception as e:
-            logger.error(f"Failed to get cache stats: {e}")
+        except Exception:
+            logger.exception("Failed to get cache stats")
             return {}

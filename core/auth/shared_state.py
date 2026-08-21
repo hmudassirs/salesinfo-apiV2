@@ -106,11 +106,17 @@ class PersistentAuthState:
     module's docstring for why this piggybacks on the application data
     store's connection instead of adding a new dependency like Redis.
 
-    `?`-style placeholders are used throughout (translated to `%s` by
-    `core.db.adapters.postgresql.translate_qmark_placeholders`, same
-    as every other query in this codebase, including the service
-    database's tables -- see `core.storage.application_state_store`) so this reads
-    like the rest of the SQL here, not like Postgres-specific code.
+    Uses native `%s` placeholders directly (psycopg2's pyformat style)
+    like the rest of this codebase's internally-authored SQL -- there
+    is only one supported backend (PostgreSQL), so there is no
+    portability reason to write against a neutral `?` convention here.
+    `translate_qmark_placeholders` (`core.db.adapters.postgresql`)
+    still exists, but only for the one genuinely external contract:
+    SQL text submitted by a client through `/api/query`
+    (`core.services.query_service.QueryService.run`), which may
+    predate this codebase's PostgreSQL-only era. Every query this
+    codebase authors itself -- this class included -- targets Postgres
+    directly.
     """
 
     def __init__(self, db_session, *, revocation_cache_ttl_seconds: float = 10.0) -> None:
@@ -157,7 +163,7 @@ class PersistentAuthState:
         await self._ensure_tables()
         async with self._db_session.get_async_session() as session:
             row = await session.fetch_one(
-                f"SELECT revoked_at FROM {_REVOCATIONS_TABLE} WHERE user_id = ?",
+                f"SELECT revoked_at FROM {_REVOCATIONS_TABLE} WHERE user_id = %s",
                 (user_id,),
             )
         value = row["revoked_at"] if row else None
@@ -173,7 +179,7 @@ class PersistentAuthState:
             await session.execute(
                 f"""
                 INSERT INTO {_REVOCATIONS_TABLE} (user_id, revoked_at)
-                VALUES (?, ?)
+                VALUES (%s, %s)
                 ON CONFLICT (user_id) DO UPDATE
                     SET revoked_at = EXCLUDED.revoked_at
                 """,
@@ -206,14 +212,14 @@ class PersistentAuthState:
             row = await session.fetch_one(
                 f"""
                 INSERT INTO {_RATE_LIMIT_TABLE} (rate_key, window_start, attempt_count)
-                VALUES (?, ?, 1)
+                VALUES (%s, %s, 1)
                 ON CONFLICT (rate_key) DO UPDATE SET
                     attempt_count = CASE
-                        WHEN {_RATE_LIMIT_TABLE}.window_start <= ? THEN 1
+                        WHEN {_RATE_LIMIT_TABLE}.window_start <= %s THEN 1
                         ELSE {_RATE_LIMIT_TABLE}.attempt_count + 1
                     END,
                     window_start = CASE
-                        WHEN {_RATE_LIMIT_TABLE}.window_start <= ? THEN ?
+                        WHEN {_RATE_LIMIT_TABLE}.window_start <= %s THEN %s
                         ELSE {_RATE_LIMIT_TABLE}.window_start
                     END
                 RETURNING attempt_count
@@ -227,7 +233,7 @@ class PersistentAuthState:
         await self._ensure_tables()
         async with self._db_session.get_async_session() as session:
             await session.execute(
-                f"DELETE FROM {_RATE_LIMIT_TABLE} WHERE rate_key = ?", (key,)
+                f"DELETE FROM {_RATE_LIMIT_TABLE} WHERE rate_key = %s", (key,)
             )
 
 

@@ -31,10 +31,10 @@ class CacheMaintenance:
         """
         current_time = int(time.time())
         result = self.application_state.execute(
-            "DELETE FROM query_cache WHERE expires_at IS NOT NULL AND expires_at < ?",
+            "DELETE FROM query_cache WHERE expires_at IS NOT NULL AND expires_at < %s",
             (current_time,),
         )
         deleted_count = result.rowcount
         if deleted_count > 0:
-            logger.info(f"Cleaned up {deleted_count} expired cache entries")
+            logger.info("Cleaned up %s expired cache entries", deleted_count)
         return deleted_count

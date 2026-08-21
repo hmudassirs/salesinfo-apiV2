@@ -58,7 +58,7 @@ class APIKeyService:
     # uvicorn workers or instances, each has its own independent cache,
     # so a revoke isn't instantly consistent across all of them either —
     # only a shared cache (e.g. Redis) would fix that.
-    # 
+    #
     # This cache is single-flight protected as well: if many requests
     # arrive simultaneously with the same raw API key and the entry is
     # not in the cache, only one of them does the state-store validation.
@@ -69,7 +69,9 @@ class APIKeyService:
     _validation_cache_hits: int = 0
     _validation_cache_misses: int = 0
 
-    def __init__(self, repository: APIKeyRepository, audit: Optional[AuditTrail] = None):
+    def __init__(
+        self, repository: APIKeyRepository, audit: Optional[AuditTrail] = None
+    ):
         """Initialize API key service.
 
         Args:
@@ -143,7 +145,7 @@ class APIKeyService:
                 scopes=scopes,
                 is_active=True,
             )
-            logger.info(f"Created API key {key_id} for user {owner_id}")
+            logger.info("Created API key %s for user %s", key_id, owner_id)
 
             if self._audit is not None:
                 self._audit.log_audit_event(
@@ -165,8 +167,8 @@ class APIKeyService:
                 "scopes": scopes,
                 "is_active": True,
             }
-        except Exception as e:
-            logger.error(f"Error creating API key: {e}")
+        except Exception:
+            logger.exception("Error creating API key")
             raise
 
     async def validate_api_key(self, api_key: str) -> Optional[dict]:
@@ -285,8 +287,8 @@ class APIKeyService:
                 }
                 for row in results
             ]
-        except Exception as e:
-            logger.error(f"Error listing API keys: {e}")
+        except Exception:
+            logger.exception("Error listing API keys")
             raise
 
     async def revoke_api_key(self, key_id: str, owner_id: str) -> bool:
@@ -304,7 +306,7 @@ class APIKeyService:
                 self.repository.revoke, key_id, owner_id
             )
             if result:
-                logger.info(f"Revoked API key {key_id}")
+                logger.info("Revoked API key %s", key_id)
                 self._evict_by_key_id(key_id)
             if self._audit is not None:
                 self._audit.log_audit_event(
@@ -316,8 +318,8 @@ class APIKeyService:
                     success=True,
                 )
             return result
-        except Exception as e:
-            logger.error(f"Error revoking API key: {e}")
+        except Exception:
+            logger.exception("Error revoking API key")
             raise
 
     async def delete_api_key(self, key_id: str, owner_id: str) -> bool:
@@ -335,7 +337,7 @@ class APIKeyService:
                 self.repository.delete, key_id, owner_id
             )
             if result:
-                logger.info(f"Deleted API key {key_id}")
+                logger.info("Deleted API key %s", key_id)
                 self._evict_by_key_id(key_id)
             if self._audit is not None:
                 self._audit.log_audit_event(
@@ -347,8 +349,8 @@ class APIKeyService:
                     success=True,
                 )
             return result
-        except Exception as e:
-            logger.error(f"Error deleting API key: {e}")
+        except Exception:
+            logger.exception("Error deleting API key")
             raise
 
     def _evict_by_key_id(self, key_id: str) -> None:

@@ -63,7 +63,7 @@ class RequestLogger:
         INSERT INTO logs (
             timestamp, level, logger, message, module, function, line,
             exception, user_id, session_id, request_id, ip_address, user_agent
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
         params = (
@@ -119,23 +119,23 @@ class RequestLogger:
         params = []
 
         if level:
-            conditions.append("level = ?")
+            conditions.append("level = %s")
             params.append(level)
 
         if user_id:
-            conditions.append("user_id = ?")
+            conditions.append("user_id = %s")
             params.append(user_id)
 
         if request_id:
-            conditions.append("request_id = ?")
+            conditions.append("request_id = %s")
             params.append(request_id)
 
         if start_time:
-            conditions.append("timestamp >= ?")
+            conditions.append("timestamp >= %s")
             params.append(start_time)
 
         if end_time:
-            conditions.append("timestamp <= ?")
+            conditions.append("timestamp <= %s")
             params.append(end_time)
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
@@ -144,7 +144,7 @@ class RequestLogger:
         SELECT * FROM logs
         WHERE {where_clause}
         ORDER BY timestamp DESC
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
         """
 
         params.extend([limit, offset])
@@ -152,8 +152,8 @@ class RequestLogger:
         try:
             rows = self.application_state.fetch_all(sql, tuple(params))
             return [dict(row) for row in rows]
-        except Exception as e:
-            logger.error(f"Failed to retrieve logs: {e}")
+        except Exception:
+            logger.exception("Failed to retrieve logs")
             return []
 
     def log_request(

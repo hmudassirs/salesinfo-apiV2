@@ -66,7 +66,7 @@ def install_performance_dashboard(
 
     `cross_process_max_age_seconds`: with `--workers N > 1`, `{prefix}/
     performance` merges in every *other* worker's most recently
-    published snapshot too (see `core.performance.cross_process` and
+    published snapshot too (see `core.performance.adapters.cross_process` and
     `core.performance.dashboard.merge`) — not just whichever one
     process happened to serve this particular request — as long as
     that worker published within this many seconds. Should stay a
@@ -106,11 +106,11 @@ def install_performance_dashboard(
             resolved_registry, recent_limit=recent_limit
         )
         container = getattr(request.app.state, "container", None)
-        application_state = container.get_application_state() if container is not None else None
+        application_state = container.application_state if container is not None else None
         if application_state is None:
             return local_summary
 
-        from core.performance.cross_process import WorkerSnapshotStore
+        from core.performance.adapters.cross_process import WorkerSnapshotStore
 
         try:
             store = WorkerSnapshotStore(application_state)

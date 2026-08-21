@@ -4,6 +4,7 @@
 unchanged for app.py."""
 
 from core.app.api.routes.auth import auth_router
+from core.app.api.routes.probes import probes_router
 from core.app.api.routes.query import router
 
-__all__ = ["router", "auth_router"]
+__all__ = ["router", "auth_router", "probes_router"]

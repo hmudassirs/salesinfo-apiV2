@@ -20,12 +20,14 @@ _POSTGRESQL_MIGRATIONS_DIR = (
 class ApplicationDataStep(LifecycleStep):
     """Owns the PostgreSQL application data connection.
 
-    Also applies the `migrations/postgresql/` schema (see
-    core.db.migrations): the auth coordination tables
+    Also applies the `migrations/postgresql/` schema in async mode
+    (see core.db.migrations): the auth coordination tables
     core.auth.shared_state.PersistentAuthState needs (JWT revocation,
-    rate limiting), plus the application state store's own tables when
-    ApplicationStateStep hasn't already created them -- see that step's
-    docstring.
+    rate limiting), plus the application state store's own tables.
+    This is the primary migration owner -- see core.db.migrations'
+    module docstring for the full ownership picture, and
+    core.storage.schema.ApplicationStateSchema for the sync-mode/
+    standalone fallback path.
     """
 
     name = "application_data"
@@ -68,7 +70,9 @@ class ApplicationDataStep(LifecycleStep):
     def shutdown_sync(self) -> None:
         if self.db_session and self.db_session._sync_pool:
             logger.info("Closing sync database connection")
+            self.db_session.close_sync()
 
     async def shutdown_async(self) -> None:
         if self.db_session and self.db_session._async_pool:
             logger.info("Closing async database connection")
+            await self.db_session.close()

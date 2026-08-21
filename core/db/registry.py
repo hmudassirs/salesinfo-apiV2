@@ -30,7 +30,7 @@ class AdapterRegistry:
             raise ValueError(f"Adapter '{name}' already registered")
 
         self._adapters[name] = adapter_class
-        logger.info(f"Registered adapter: {name}")
+        logger.info("Registered adapter: %s", name)
 
     def unregister(self, name: str) -> None:
         """Unregister a database adapter.
@@ -47,7 +47,7 @@ class AdapterRegistry:
         del self._adapters[name]
         if name in self._instances:
             del self._instances[name]
-        logger.info(f"Unregistered adapter: {name}")
+        logger.info("Unregistered adapter: %s", name)
 
     def get_adapter_class(self, name: str) -> Type[DatabaseAdapter]:
         """Get adapter class by name.
@@ -83,7 +83,7 @@ class AdapterRegistry:
         """
         adapter_class = self.get_adapter_class(name)
         adapter = adapter_class(*args, **kwargs)
-        logger.debug(f"Created adapter instance: {name}")
+        logger.debug("Created adapter instance: %s", name)
         return adapter
 
     def list_adapters(self) -> list[str]:

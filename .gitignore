@@ -37,3 +37,4 @@ gittoken.txt
 .pytest_cache/
 api-efficiency/
 docs/
+*:Zone.Identifier

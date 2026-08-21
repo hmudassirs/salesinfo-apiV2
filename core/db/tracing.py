@@ -130,7 +130,7 @@ class PerformanceMonitor:
                 f"(threshold: {self.threshold_ms}ms)"
             )
         else:
-            logger.debug(f"Operation: {self.name} took {elapsed_ms:.2f}ms")
+            logger.debug("Operation: %s took %.2fms", self.name, elapsed_ms)
 
         if exc_type:
             operation_info["error"] = f"{exc_type.__name__}: {exc_val}"

@@ -38,12 +38,12 @@ it now creates and updates a real OTel `Counter` per metric name.
 """
 
 import logging
-import os
 import time
 from contextlib import contextmanager
 from functools import wraps
 from typing import Any, Callable, Optional
 
+from core.config_env import env_flag
 from opentelemetry import metrics, trace
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -53,12 +53,6 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
-
-def _env_flag(name: str, default: bool = False) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 logger = logging.getLogger(__name__)
 
@@ -122,13 +116,13 @@ class OpenTelemetryManager:
 
     def initialize(self) -> None:
         """Initialize OpenTelemetry providers."""
-        if _env_flag("OTEL_SDK_DISABLED", default=False):
+        if env_flag("OTEL_SDK_DISABLED", default=False):
             logger.info(
                 "OpenTelemetry SDK disabled via OTEL_SDK_DISABLED; no tracer or meter will be initialized."
             )
             return
 
-        if _env_flag("PERF_EXPORT_OTEL", default=True):
+        if env_flag("PERF_EXPORT_OTEL", default=True):
             logger.info(
                 "OpenTelemetry export enabled; tracing/metrics will be initialized."
             )
@@ -159,9 +153,9 @@ class OpenTelemetryManager:
                 self.tracer_provider.add_span_processor(
                     BatchSpanProcessor(otlp_exporter)
                 )
-                logger.info(f"OTLP trace exporter enabled: {self.otlp_endpoint}")
+                logger.info("OTLP trace exporter enabled: %s", self.otlp_endpoint)
             except Exception as e:
-                logger.warning(f"Failed to initialize OTLP trace exporter: {e}")
+                logger.warning("Failed to initialize OTLP trace exporter: %s", e)
 
         trace.set_tracer_provider(self.tracer_provider)
         self.tracer = trace.get_tracer(__name__)
@@ -185,15 +179,15 @@ class OpenTelemetryManager:
                         export_interval_millis=self.metric_export_interval_millis,
                     )
                 )
-                logger.info(f"OTLP metric exporter enabled: {self.otlp_endpoint}")
+                logger.info("OTLP metric exporter enabled: %s", self.otlp_endpoint)
             except Exception as e:
-                logger.warning(f"Failed to initialize OTLP metric exporter: {e}")
+                logger.warning("Failed to initialize OTLP metric exporter: %s", e)
 
         self.meter_provider = MeterProvider(resource=resource, metric_readers=readers)
         metrics.set_meter_provider(self.meter_provider)
         self.meter = metrics.get_meter(__name__)
 
-        logger.info(f"OpenTelemetry initialized for service: {self.service_name}")
+        logger.info("OpenTelemetry initialized for service: %s", self.service_name)
 
     @contextmanager
     def trace_operation(

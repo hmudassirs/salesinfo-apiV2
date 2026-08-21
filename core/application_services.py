@@ -90,13 +90,18 @@ class ApplicationServices:
         self.users = UserRepository(instrumented_state)
         self.logging = RequestLogger(instrumented_state)
         self.tracing = RequestTracer(instrumented_state)
-        self.caching = QueryResultCache(instrumented_state)
+        self._query_result_cache = QueryResultCache(instrumented_state)
         # L1 in-process cache + single-flight coalescing in front of
-        # `self.caching` (the L2/application-state cache) -- see
-        # query_cache_coordinator.py's module docstring. Routes should
-        # go through this, not `self.caching` directly, for anything on
-        # the request hot path.
-        self.query_cache = QueryCacheCoordinator(self.caching)
+        # `self._query_result_cache` (the L2/application-state cache) --
+        # see query_cache_coordinator.py's module docstring.
+        # `query_cache` is the only cache-related attribute this class
+        # exposes publicly: the L2 cache is private (leading underscore)
+        # specifically so nothing outside this constructor and
+        # `get_stats()` below can reach around the coordinator and hit
+        # L2 directly -- there used to be no name-level signal for
+        # that, just a comment saying "don't", which a route could
+        # (and previously did have the *option* to) ignore.
+        self.query_cache = QueryCacheCoordinator(self._query_result_cache)
         self.audit = AuditTrail(instrumented_state)
 
         settings = settings or AppSettings.from_env()
@@ -127,5 +132,5 @@ class ApplicationServices:
             Service statistics
         """
         stats = ApplicationDiagnostics(self.application_state).table_stats()
-        stats.update(self.caching.get_cache_stats())
+        stats.update(self._query_result_cache.get_cache_stats())
         return stats

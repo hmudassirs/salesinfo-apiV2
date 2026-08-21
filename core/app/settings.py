@@ -2,10 +2,78 @@
 """Application settings and configuration."""
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DatabaseRuntimeSettings:
+    """Raw PostgreSQL connection parameters for the one shared database
+    (application data + application state store -- see
+    core.storage.application_state_store's module docstring for why
+    this isn't a per-subsystem choice).
+
+    Kept as its own dataclass, distinct from `PoolRuntimeSettings`
+    below: this is about *where* to connect, not *how many*
+    connections to hold open.
+    """
+
+    # Full connection URL, e.g.
+    # `postgresql://user:pass@host:5432/dbname?sslmode=require`. Takes
+    # precedence over the discrete host/port/... fields below when
+    # set -- mirrors `DatabaseConfig.from_postgresql`'s own dsn
+    # precedence.
+    dsn: Optional[str] = None
+    host: str = "localhost"
+    port: int = 5432
+    database: str = "postgres"
+    user: str = "postgres"
+    password: str = ""
+    # libpq sslmode (e.g. "require", "verify-full"). Production
+    # deployments should set this explicitly -- psycopg2/libpq default
+    # to "prefer" (opportunistic, not enforced) when omitted.
+    sslmode: Optional[str] = None
+
+
+@dataclass
+class PoolRuntimeSettings:
+    """Connection pool sizing for the two PostgreSQL pools this process
+    opens (application data, application state store).
+
+    Defaults are derived from the host's actual CPU count
+    (`core.concurrency.cpu.recommended_sizing()`) rather than a
+    hardcoded constant that either starves a bigger box or
+    oversubscribes a smaller one -- see that module's docstring.
+    `AppSettings.from_env()` only overrides a field when its matching
+    env var is actually set.
+    """
+
+    application_data_min_size: int
+    application_data_max_size: int
+    application_state_min_size: int
+    application_state_max_size: int
+    timeout: int = 30
+
+
+@dataclass
+class ExecutorRuntimeSettings:
+    """Thread pool sizing for the dedicated, per-workload executors in
+    `core.concurrency.executors` -- see that module's docstring for why
+    application data / application state / background / password work
+    each get their own bounded pool instead of sharing one.
+
+    Sized off the matching connection pool's max size (plus headroom)
+    by default, the same core-count-derived defaults `PoolRuntimeSettings`
+    above uses; `AppSettings.from_env()` only overrides a field when its
+    matching env var is set.
+    """
+
+    application_data_workers: int
+    application_state_workers: int
+    background_workers: int
+    password_workers: int
 
 
 @dataclass
@@ -97,6 +165,80 @@ class AppSettings:
     auth_rate_limit_max_attempts: int = 10
     auth_rate_limit_window_seconds: float = 60.0
 
+    # --- Application state store maintenance (core.app.lifecycle
+    # .application_state.ApplicationStateStep) ---
+    # Periodic cleanup of unbounded generated data (expired cache
+    # entries, old traces/audit rows) -- see that step's docstring for
+    # why this needs to run at all.
+    maintenance_enabled: bool = True
+    maintenance_interval_seconds: float = 24 * 60 * 60  # 24 hours
+
+    # --- First-admin bootstrap (core.auth.admin_bootstrap
+    # .AdminBootstrapService) ---
+    # No default password: a no-op unless INITIAL_ADMIN_PASSWORD is
+    # explicitly set -- see that class's docstring for why (this
+    # replaced a hardcoded admin/admin123! account created on every
+    # fresh database). initial_admin_email left as None here rather
+    # than defaulted, so AdminBootstrapService can apply its own
+    # username-derived default only when this is genuinely unset.
+    initial_admin_username: str = "admin"
+    initial_admin_password: Optional[str] = None
+    initial_admin_email: Optional[str] = None
+
+    # --- Performance-subsystem application-level wiring
+    # (core.app.lifecycle.performance.PerformanceStep) ---
+    # Distinct from core.performance.config.PerformanceConfig's own
+    # PERF_* settings (sample rate, collectors, etc.): those configure
+    # the framework-independent performance package itself, while
+    # these two configure *this application's* integration of it (how
+    # often to bridge its registry onto OTel / publish cross-process
+    # snapshots), so they live here rather than in that package.
+    perf_otel_export_interval_seconds: float = 15.0
+    perf_cross_process_publish_interval_seconds: float = 2.0
+
+    # --- Runtime infrastructure (composition-root config) ---
+    # Connection parameters and pool/executor sizing for the process's
+    # database and thread pools. These used to be read directly out of
+    # `os.environ` in `run_api.py` -- a second, parallel configuration
+    # path alongside this class (see the P0 item in the refactor
+    # review). `run_api.py` should now build `DatabaseConfig`,
+    # `PoolSettings`, and `configure_executors(...)` entirely from these
+    # three fields instead of calling `os.getenv()` itself.
+    database: DatabaseRuntimeSettings = field(default_factory=DatabaseRuntimeSettings)
+    pool: PoolRuntimeSettings = field(
+        default_factory=lambda: AppSettings._default_pool_settings()
+    )
+    executors: ExecutorRuntimeSettings = field(
+        default_factory=lambda: AppSettings._default_executor_settings()
+    )
+
+    @staticmethod
+    def _default_pool_settings() -> "PoolRuntimeSettings":
+        from core.concurrency.cpu import recommended_sizing
+
+        sizing = recommended_sizing()
+        return PoolRuntimeSettings(
+            application_data_min_size=sizing.application_data_pool_min,
+            application_data_max_size=sizing.application_data_pool_max,
+            application_state_min_size=sizing.state_pool_min,
+            application_state_max_size=sizing.state_pool_max,
+        )
+
+    @staticmethod
+    def _default_executor_settings(
+        pool: Optional["PoolRuntimeSettings"] = None,
+    ) -> "ExecutorRuntimeSettings":
+        from core.concurrency.cpu import recommended_sizing
+
+        sizing = recommended_sizing()
+        pool = pool or AppSettings._default_pool_settings()
+        return ExecutorRuntimeSettings(
+            application_data_workers=pool.application_data_max_size + 2,
+            application_state_workers=pool.application_state_max_size + 2,
+            background_workers=sizing.background_executor_workers,
+            password_workers=sizing.password_executor_workers,
+        )
+
     @classmethod
     def from_env(cls) -> "AppSettings":
         """Create settings from environment variables.
@@ -105,11 +247,18 @@ class AppSettings:
             AppSettings instance
 
         Raises:
-            RuntimeError: If JWT_SECRET_KEY is not set, or if CORS is
+            RuntimeError: If JWT_SECRET_KEY is not set, if CORS is
                 configured with both a wildcard origin and credentials
-                enabled (an insecure, browser-rejected combination).
+                enabled (an insecure, browser-rejected combination), or
+                if `validate()` finds any other invalid combination
+                (bad pool/executor sizes, a query timeout that doesn't
+                fit inside the pool acquire timeout, an unrecognized
+                JWT algorithm, etc. -- see `validate()`'s docstring for
+                the full set of checks).
         """
         import os
+
+        from core.config_env import env_flag, env_float, env_int
 
         jwt_secret_key = os.getenv("JWT_SECRET_KEY")
         if not jwt_secret_key:
@@ -149,7 +298,55 @@ class AppSettings:
         normal_limit = os.getenv("NORMAL_QUERY_CONCURRENCY_LIMIT")
         expensive_limit = os.getenv("EXPENSIVE_QUERY_CONCURRENCY_LIMIT")
 
-        return cls(
+        database = DatabaseRuntimeSettings(
+            dsn=os.getenv("DATABASE_URL"),
+            host=os.getenv("PGHOST", "localhost"),
+            port=int(os.getenv("PGPORT", "5432")),
+            database=os.getenv("PGDATABASE", "postgres"),
+            user=os.getenv("PGUSER", "postgres"),
+            password=os.getenv("PGPASSWORD", ""),
+            sslmode=os.getenv("PGSSLMODE"),
+        )
+
+        pool_defaults = cls._default_pool_settings()
+        pool = PoolRuntimeSettings(
+            application_data_min_size=env_int(
+                "APPLICATION_DATA_POOL_MIN_SIZE",
+                pool_defaults.application_data_min_size,
+            ),
+            application_data_max_size=env_int(
+                "APPLICATION_DATA_POOL_MAX_SIZE",
+                pool_defaults.application_data_max_size,
+            ),
+            application_state_min_size=env_int(
+                "APPLICATION_STATE_POOL_MIN_SIZE",
+                pool_defaults.application_state_min_size,
+            ),
+            application_state_max_size=env_int(
+                "APPLICATION_STATE_POOL_MAX_SIZE",
+                pool_defaults.application_state_max_size,
+            ),
+        )
+
+        executor_defaults = cls._default_executor_settings(pool)
+        executors = ExecutorRuntimeSettings(
+            application_data_workers=env_int(
+                "APPLICATION_DATA_EXECUTOR_WORKERS",
+                executor_defaults.application_data_workers,
+            ),
+            application_state_workers=env_int(
+                "APPLICATION_STATE_EXECUTOR_WORKERS",
+                executor_defaults.application_state_workers,
+            ),
+            background_workers=env_int(
+                "BACKGROUND_EXECUTOR_WORKERS", executor_defaults.background_workers
+            ),
+            password_workers=env_int(
+                "PASSWORD_EXECUTOR_WORKERS", executor_defaults.password_workers
+            ),
+        )
+
+        settings = cls(
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             jwt_secret_key=jwt_secret_key,
             jwt_algorithm=os.getenv("JWT_ALGORITHM", "HS256"),
@@ -190,7 +387,181 @@ class AppSettings:
             auth_rate_limit_window_seconds=float(
                 os.getenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "60.0")
             ),
+            maintenance_enabled=env_flag("MAINTENANCE_ENABLED", default=True),
+            maintenance_interval_seconds=env_float(
+                "MAINTENANCE_INTERVAL_SECONDS", 24 * 60 * 60
+            ),
+            initial_admin_username=os.getenv("INITIAL_ADMIN_USERNAME", "admin"),
+            initial_admin_password=os.getenv("INITIAL_ADMIN_PASSWORD"),
+            initial_admin_email=os.getenv("INITIAL_ADMIN_EMAIL"),
+            perf_otel_export_interval_seconds=env_float(
+                "PERF_OTEL_EXPORT_INTERVAL_SECONDS", 15.0
+            ),
+            perf_cross_process_publish_interval_seconds=env_float(
+                "PERF_CROSS_PROCESS_PUBLISH_INTERVAL_SECONDS", 2.0
+            ),
+            database=database,
+            pool=pool,
+            executors=executors,
         )
+        settings.validate()
+        return settings
+
+    def validate(self) -> None:
+        """Fail fast on configuration that would otherwise surface as a
+        confusing runtime error minutes or hours after startup (framework
+        review item "configuration: needs production validation" /
+        P0-5). Called automatically at the end of `from_env()`, so every
+        real deployment gets these checks; tests that build
+        `AppSettings(...)` directly can opt in by calling this
+        themselves.
+
+        Deliberately conservative: this only rejects combinations that
+        are never correct (negative/zero sizes, a pool floor above its
+        own ceiling, a query timeout that can't fit inside its own pool
+        wait budget, etc.), not combinations that are merely unusual.
+        """
+        errors: list[str] = []
+
+        def _positive(value: float, label: str) -> None:
+            if value <= 0:
+                errors.append(f"{label} must be > 0 (got {value})")
+
+        def _non_negative(value: float, label: str) -> None:
+            if value < 0:
+                errors.append(f"{label} must be >= 0 (got {value})")
+
+        def _min_max(min_value: int, max_value: int, label: str) -> None:
+            _positive(min_value, f"{label}_min_size")
+            _positive(max_value, f"{label}_max_size")
+            if min_value > max_value:
+                errors.append(
+                    f"{label}_min_size ({min_value}) must be <= "
+                    f"{label}_max_size ({max_value})"
+                )
+
+        # --- Pool sizes ---
+        _min_max(
+            self.pool.application_data_min_size,
+            self.pool.application_data_max_size,
+            "application_data_pool",
+        )
+        _min_max(
+            self.pool.application_state_min_size,
+            self.pool.application_state_max_size,
+            "application_state_pool",
+        )
+        _positive(self.pool.timeout, "pool.timeout")
+
+        # --- Executor sizes ---
+        _positive(self.executors.application_data_workers, "executors.application_data_workers")
+        _positive(self.executors.application_state_workers, "executors.application_state_workers")
+        _positive(self.executors.background_workers, "executors.background_workers")
+        _positive(self.executors.password_workers, "executors.password_workers")
+        # An executor with fewer workers than its matching pool's
+        # max_size can't ever drive every connection concurrently --
+        # not fatal, but worth failing on since it's always a
+        # misconfiguration rather than an intentional choice (there's
+        # no scenario where fewer threads than connections helps).
+        if self.executors.application_data_workers < self.pool.application_data_max_size:
+            errors.append(
+                "executors.application_data_workers "
+                f"({self.executors.application_data_workers}) is less than "
+                f"pool.application_data_max_size ({self.pool.application_data_max_size}); "
+                "some pooled connections could never be used concurrently"
+            )
+        if self.executors.application_state_workers < self.pool.application_state_max_size:
+            errors.append(
+                "executors.application_state_workers "
+                f"({self.executors.application_state_workers}) is less than "
+                f"pool.application_state_max_size ({self.pool.application_state_max_size}); "
+                "some pooled connections could never be used concurrently"
+            )
+
+        # --- Query limits ---
+        _positive(self.max_result_rows, "max_result_rows")
+        _positive(self.max_result_bytes, "max_result_bytes")
+        _positive(self.max_query_duration_seconds, "max_query_duration_seconds")
+        # The query timeout is enforced *after* a connection is already
+        # acquired from the pool (see core.services.query_service); a
+        # pool acquire timeout shorter than the query timeout means a
+        # waiting caller can be timed out of the pool queue well before
+        # the query it's waiting behind would itself be cancelled,
+        # which just relabels ordinary load as a pool-timeout error.
+        if self.max_query_duration_seconds > self.pool.timeout:
+            errors.append(
+                f"max_query_duration_seconds ({self.max_query_duration_seconds}) "
+                f"exceeds pool.timeout ({self.pool.timeout}); a caller can be "
+                "timed out waiting for a connection before a long-running query "
+                "on another connection would even be cancelled"
+            )
+
+        # --- Query concurrency limits ---
+        for label, value in (
+            ("fast_query_concurrency_limit", self.fast_query_concurrency_limit),
+            ("normal_query_concurrency_limit", self.normal_query_concurrency_limit),
+            ("expensive_query_concurrency_limit", self.expensive_query_concurrency_limit),
+        ):
+            if value is not None:
+                _positive(value, label)
+
+        # --- JWT ---
+        if not self.jwt_secret_key:
+            errors.append("jwt_secret_key must be set")
+        _positive(self.jwt_expiry_seconds, "jwt_expiry_seconds")
+        if self.jwt_algorithm not in {"HS256", "HS384", "HS512", "RS256", "RS384", "RS512"}:
+            errors.append(f"jwt_algorithm {self.jwt_algorithm!r} is not a recognized JWT algorithm")
+
+        # --- CORS ---
+        if not self.cors_allow_origins:
+            errors.append("cors_allow_origins must not be empty")
+        if self.cors_allow_credentials and "*" in self.cors_allow_origins:
+            errors.append(
+                "cors_allow_origins cannot include '*' when "
+                "cors_allow_credentials is true"
+            )
+
+        # --- Database credentials / TLS ---
+        # `postgres`/`postgres` is psycopg2's and this module's own
+        # fallback default -- fine for local dev, a real production
+        # footgun if it's still what's configured against a real
+        # database (framework review item "SQL authorization... not a
+        # true security boundary" -- least-privilege roles start with
+        # not running as the superuser).
+        if self.database.user == "postgres" and not self.database.dsn:
+            logger.warning(
+                "PGUSER is 'postgres' (the default superuser). Production "
+                "deployments should connect as a dedicated least-privilege "
+                "role instead -- see the framework review's least-privilege "
+                "PostgreSQL item."
+            )
+        if not self.database.sslmode and not self.database.dsn:
+            logger.warning(
+                "PGSSLMODE is not set; libpq defaults to 'prefer' (opportunistic, "
+                "not enforced). Production deployments should set it explicitly, "
+                "e.g. 'require' or 'verify-full'."
+            )
+
+        # --- Auth rate limiting ---
+        if self.auth_rate_limit_enabled:
+            _positive(self.auth_rate_limit_max_attempts, "auth_rate_limit_max_attempts")
+            _positive(self.auth_rate_limit_window_seconds, "auth_rate_limit_window_seconds")
+
+        # --- Maintenance ---
+        if self.maintenance_enabled:
+            _positive(self.maintenance_interval_seconds, "maintenance_interval_seconds")
+
+        # --- Performance/OTel intervals ---
+        _positive(self.perf_otel_export_interval_seconds, "perf_otel_export_interval_seconds")
+        _positive(
+            self.perf_cross_process_publish_interval_seconds,
+            "perf_cross_process_publish_interval_seconds",
+        )
+
+        if errors:
+            raise RuntimeError(
+                "Invalid configuration:\n" + "\n".join(f"  - {e}" for e in errors)
+            )
 
     def configure_logging(self) -> None:
         """Configure logging based on settings."""
@@ -198,4 +569,4 @@ class AppSettings:
             level=getattr(logging, self.log_level),
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
-        logger.info(f"Logging configured with level: {self.log_level}")
+        logger.info("Logging configured with level: %s", self.log_level)

@@ -11,15 +11,18 @@ request, call this, and encode the response.
 
 from __future__ import annotations
 
-import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
 from core.caching.query_cache_coordinator import QueryCacheCoordinator
+from core.db.adapters.postgresql import StatementTimeoutError
 from core.db.session import DatabaseSession
 from core.db.sql_policy import classify_cost, classify_operation, extract_tables, has_scope
 from core.services.query_limits import get_limits, semaphore_for
+
+logger = logging.getLogger(__name__)
 
 
 class QueryAuthorizationError(Exception):
@@ -27,7 +30,12 @@ class QueryAuthorizationError(Exception):
 
 
 class QueryTimeoutError(Exception):
-    """Statement exceeded max_query_duration_seconds (roadmap 13.4)."""
+    """Statement exceeded max_query_duration_seconds (roadmap 13.4).
+
+    Raised only when PostgreSQL itself cancels the statement via
+    server-side `statement_timeout` (see `_execute_gated`'s docstring)
+    -- never merely because this coroutine's caller stopped waiting.
+    """
 
 
 @dataclass
@@ -112,21 +120,28 @@ class QueryService:
         cost = classify_cost(sql)
 
         if operation == "write":
-            data = await self._execute_gated(sql, params, cost)
+            data, truncated = await self._execute_gated(sql, params, cost)
             # Best-effort: an invalidation failure shouldn't fail the
             # write itself, just risk a stale read until the next
             # write or TTL expiry.
             try:
                 await self._invalidate_after_write(sql)
             except Exception:
-                pass
-            return QueryOutcome(data=data, cached=False)
+                logger.debug("Post-write cache invalidation failed", exc_info=True)
+            return QueryOutcome(data=data, cached=False, truncated=truncated)
 
         cache_key = self._cache.cache_key(sql, params)
         tables = extract_tables(sql)
 
+        # Only set when `_run_query` actually ran (a cache miss) --
+        # stays False on a cache hit, since nothing was freshly
+        # executed to truncate.
+        fresh_truncated = False
+
         async def _run_query() -> list:
-            return await self._execute_gated(sql, params, cost)
+            nonlocal fresh_truncated
+            data, fresh_truncated = await self._execute_gated(sql, params, cost)
+            return data
 
         async def _persist(data: list) -> None:
             await self._cache.persist_l2(sql, data, params, user_id or None)
@@ -134,7 +149,17 @@ class QueryService:
         result = await self._cache.get_or_execute(
             cache_key, _run_query, on_miss_persist=_persist, tables=tables
         )
-        data, truncated = _apply_result_limits(result.data)
+        # `_apply_result_limits` re-checks whatever came back from the
+        # cache (or from a fresh execution already bounded by
+        # `_execute`'s `fetch_bounded` call) against the *current*
+        # limits -- cheap and normally a no-op, but still meaningful
+        # if `configure_query_limits()` lowered the limits after this
+        # entry was cached. `fresh_truncated` carries the "was this
+        # execution itself cut short" signal `_apply_result_limits`
+        # alone can't see once cache persistence only ever stores
+        # already-bounded data (see `_execute`'s docstring).
+        data, limit_truncated = _apply_result_limits(result.data)
+        truncated = fresh_truncated or limit_truncated
         return QueryOutcome(data=data, cached=result.cached, truncated=truncated)
 
     async def _invalidate_after_write(self, sql: str) -> None:
@@ -146,26 +171,79 @@ class QueryService:
                 return
         await self._cache.clear_all()
 
-    async def _execute_gated(self, sql: str, params: tuple, cost) -> list:
+    async def _execute_gated(
+        self, sql: str, params: tuple, cost
+    ) -> tuple[list, bool]:
         """Acquire the cost-class semaphore (Phase 14) and enforce the
-        query duration ceiling (13.4) around the actual DB call."""
+        query duration ceiling (13.4) around the actual DB call.
+
+        The duration ceiling is enforced by PostgreSQL's own
+        server-side `statement_timeout` (`self._execute` passes it
+        through to `db.fetch_bounded`), not by wrapping this call in
+        `asyncio.wait_for()`. That distinction matters: `fetch_bounded()`
+        runs the actual blocking `psycopg2` call in a worker thread
+        (`core.concurrency.executors`), and Python has no way to
+        forcibly stop a running thread. Cancelling the *coroutine*
+        awaiting that thread (what `asyncio.wait_for()`'s timeout
+        does) doesn't stop the thread -- it keeps running the query to
+        completion in the background, unsupervised, while the
+        cancelled coroutine's caller believes the query is over. If
+        the pooled connection is then returned to the pool (or even
+        just used for a rollback from a different thread) while that
+        background thread is still reading from the same socket, two
+        unrelated callers can end up sharing one physical connection
+        at the same time -- silent protocol/response corruption, not
+        just a slow query. Only PostgreSQL itself, via
+        `statement_timeout`, can guarantee the statement has actually
+        stopped running before this method returns.
+
+        This does *not* bound how long a request can wait to start
+        running at all -- queued behind other work in
+        `application_data_executor` (sized to track the connection
+        pool, so that queue is normally short) or waiting to acquire a
+        pooled connection in the first place (bounded separately by
+        `DatabaseSettings.pool.timeout`, which raises
+        `MaxConnectionsExceeded` rather than silently hanging). Once a
+        worker thread actually starts running the statement, though,
+        `statement_timeout` is the only clock that matters.
+
+        Returns:
+            `(rows, truncated)` -- see `_execute`'s docstring.
+        """
         semaphore = semaphore_for(cost)
         async with semaphore:
             limits = get_limits()
             try:
-                return await asyncio.wait_for(
-                    self._execute(sql, params),
-                    timeout=limits.max_query_duration_seconds,
+                return await self._execute(
+                    sql,
+                    params,
+                    statement_timeout_seconds=limits.max_query_duration_seconds,
                 )
-            except asyncio.TimeoutError as exc:
+            except StatementTimeoutError as exc:
                 raise QueryTimeoutError(
                     f"Query exceeded the {limits.max_query_duration_seconds}s "
                     "execution limit"
                 ) from exc
 
-    async def _execute(self, sql: str, params: tuple) -> list:
+    async def _execute(
+        self, sql: str, params: tuple, *, statement_timeout_seconds: float
+    ) -> tuple[list, bool]:
+        """Run `sql` and return `(rows, truncated)`, streaming from
+        PostgreSQL via a server-side cursor rather than materializing
+        the full result before applying `max_result_rows`/
+        `max_result_bytes` -- see `PostgreSQLAdapter.fetch_bounded`'s
+        docstring for why `fetch_all()` followed by a Python-side
+        truncation doesn't actually bound this process's memory use
+        the way it looks like it does."""
+        limits = get_limits()
         async with self._db_session.get_async_session() as db:
-            return await db.fetch_all(sql, params)
+            return await db.fetch_bounded(
+                sql,
+                params,
+                max_rows=limits.max_result_rows,
+                max_bytes=limits.max_result_bytes,
+                statement_timeout_seconds=statement_timeout_seconds,
+            )
 
 
 def _apply_result_limits(data: list) -> tuple[list, bool]:

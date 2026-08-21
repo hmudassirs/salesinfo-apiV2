@@ -16,9 +16,14 @@ class ExecutorsStep(LifecycleStep):
     the lifespan even begins) since it only depends on static pool
     config, not anything a LifecycleStep discovers at runtime -- this
     step exists purely to guarantee shutdown happens in the right slot:
-    after the persistence queue has drained (so its jobs can still run)
-    and after the application state store is closed, but before the main
-    application data pool closes (roadmap Phase 10 shutdown ordering).
+    started first (see ApplicationLifespan._steps) so it shuts down
+    *last*, after the persistence queue has drained, the application
+    state store has closed, and the main application data pool has
+    closed -- all three dispatch blocking work through these executors
+    (`run_in_application_data_executor` / `run_in_state_executor`) as
+    part of their own shutdown, so shutting the executors down any
+    earlier makes those calls raise `RuntimeError: cannot schedule new
+    futures after shutdown`.
     """
 
     name = "executors"

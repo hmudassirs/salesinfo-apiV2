@@ -2,7 +2,7 @@
 name = "salesdata-api"
 version = "0.1.0"
 description = "A FastAPI application for sales data."
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "fastapi",
     "uvicorn[standard]",
@@ -17,7 +17,7 @@ dependencies = [
     "opentelemetry-exporter-otlp-proto-grpc",
     "opentelemetry-exporter-prometheus",
     "prometheus-client",
-    "psycopg2",
+    "psycopg2-binary",
     "starlette",
     "PyJWT",
     "httpx",

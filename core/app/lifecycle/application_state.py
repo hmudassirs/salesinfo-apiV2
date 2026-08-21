@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import functools
 import logging
-import os
 from typing import Any, Dict, Optional
 
 from core.app.lifecycle.base import LifecycleStep
@@ -23,19 +22,6 @@ from core.storage.schema import ApplicationStateSchema
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_MAINTENANCE_INTERVAL_SECONDS = 24 * 60 * 60  # 24 hours
-
-
-def _env_flag(name: str, default: bool) -> bool:
-    """Parse a boolean env var. Local copy of the same tiny helper
-    `core.app.lifecycle.performance` defines for itself -- kept
-    separate rather than shared, since both are a few lines and neither
-    subsystem should have to import the other just for this."""
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
 
 class ApplicationStateStep(LifecycleStep):
     """Owns the application state store (api keys, users, logging, tracing,
@@ -46,12 +32,13 @@ class ApplicationStateStep(LifecycleStep):
     application data store (`ApplicationStateStore.for_postgres`, using
     `db_config.extra_options` -- the same host/port/database/user/
     password ApplicationDataStep connects with) -- see
-    core.storage.application_state_store's module docstring. Table creation is
-    idempotent (`CREATE TABLE IF NOT EXISTS`) and safe to run whether
-    or not ApplicationDataStep's own migration pass has already applied
-    `migrations/postgresql/0002_application_state.sql` --
-    whichever step runs first creates the tables, the other is a no-op
-    against an already-current schema.
+    core.storage.application_state_store's module docstring. Table creation
+    (`ApplicationStateSchema.create()`, called below) is the sync-mode/
+    standalone fallback migration path, not the primary one -- in the
+    async mode this application runs in, `ApplicationDataStep` (which
+    always starts before this step -- see `core.app.lifecycle.manager`'s
+    fixed step order) has already applied the same migrations. Both
+    paths are idempotent, so calling this here is always safe.
 
     ApplicationStateStore itself only knows connect/execute/fetch/
     transaction; schema creation, admin bootstrap, and cache cleanup are
@@ -81,25 +68,31 @@ class ApplicationStateStep(LifecycleStep):
         self,
         db_config,
         *,
-        settings: Optional[AppSettings] = None,
+        settings: AppSettings,
         pool_min_size: int = 2,
         pool_max_size: int = 8,
     ):
         self.db_config = db_config
+        # Required, not Optional: this is an application integration
+        # component (core.app.lifecycle), not a standalone reusable
+        # package -- see the framework review's "standalone classes
+        # versus application classes" distinction, and
+        # `PerformanceStep`'s constructor for the same reasoning.
         # Threaded through to ApplicationServices, which uses it to
         # build authentication_service (JWT secret/algorithm/expiry).
-        # See ApplicationServices.__init__'s docstring for the
-        # AppSettings.from_env() fallback when this is left None.
+        # There used to be an `if settings is not None else
+        # os.getenv(...)` fallback here; every real construction site
+        # (core.app.lifecycle.manager.ApplicationLifespan, which also
+        # now requires settings) always passed one anyway, so the
+        # fallback path was dead in production and only weakened the
+        # "AppSettings.from_env() is the one place that reads the
+        # environment" invariant. Tests that want standalone behavior
+        # now construct an explicit `AppSettings(...)` instead.
         self.settings = settings
         self.pool_min_size = pool_min_size
         self.pool_max_size = pool_max_size
-        self.maintenance_enabled = _env_flag("MAINTENANCE_ENABLED", default=True)
-        self.maintenance_interval_seconds = float(
-            os.getenv(
-                "MAINTENANCE_INTERVAL_SECONDS",
-                str(_DEFAULT_MAINTENANCE_INTERVAL_SECONDS),
-            )
-        )
+        self.maintenance_enabled = settings.maintenance_enabled
+        self.maintenance_interval_seconds = settings.maintenance_interval_seconds
         self.application_state: Optional[ApplicationStateStore] = None
         self.application_services: Optional[ApplicationServices] = None
         self.observability_queue: Optional[ObservabilityWriteQueue] = None
@@ -121,7 +114,7 @@ class ApplicationStateStep(LifecycleStep):
 
         self.application_state.connect()
         ApplicationStateSchema(self.application_state).create()
-        AdminBootstrapService(self.application_state).initialize()
+        AdminBootstrapService(self.application_state, settings=self.settings).initialize()
         CacheMaintenance(self.application_state).cleanup_expired_cache()
 
         self.application_services = ApplicationServices(
@@ -153,17 +146,17 @@ class ApplicationStateStep(LifecycleStep):
         # AuditTrail.set_queue's docstring.
         self.application_services.audit.set_queue(self.observability_queue)
 
+        # Only application_state/application_services are registered on
+        # the container -- everything else here (query cache, request
+        # logger/tracer, audit trail, api key/user repositories, the
+        # api key/authentication services) is already reachable as
+        # `application_services.<name>` (see core/application_services.py).
+        # A second, duplicate top-level container field per service was
+        # removed as consistency debt -- see ApplicationContainer's
+        # docstring.
         return {
             "application_state": self.application_state,
             "application_services": self.application_services,
-            "query_cache": self.application_services.caching,
-            "request_logger": self.application_services.logging,
-            "request_tracer": self.application_services.tracing,
-            "audit_trail": self.application_services.audit,
-            "api_key_repository": self.application_services.api_keys,
-            "user_repository": self.application_services.users,
-            "api_key_service": self.application_services.api_key_service,
-            "authentication_service": self.application_services.authentication_service,
         }
 
     async def startup_async(self) -> Dict[str, Any]:

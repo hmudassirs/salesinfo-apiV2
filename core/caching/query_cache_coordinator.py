@@ -75,11 +75,11 @@ class QueryCacheCoordinator:
     ):
         self._l2 = l2_cache
         self._l1 = HybridQueryCache(max_size=l1_max_size, default_ttl=l1_ttl_seconds)
-        # HybridQueryCache.put() forwards `ttl` straight to CacheEntry and
-        # only treats `None` as "no expiry" -- it does NOT fall back to
-        # the `default_ttl` given to its constructor when `ttl` is
-        # omitted. So every put() below passes this explicitly, or
-        # entries would never expire from L1 regardless of L2's TTL.
+        # HybridQueryCache.put() falls back to l1_ttl_seconds when `ttl`
+        # is omitted, but every put() below still passes it explicitly
+        # -- one less thing to have to trust an omitted default is
+        # doing the right thing, and it keeps L1's expiry visibly tied
+        # to the same value L2's TTL is documented against.
         self._l1_ttl_seconds = l1_ttl_seconds
         # Guards `_inflight` bookkeeping only (a dict mutation), never
         # held across the actual L2 read or query execution -- same

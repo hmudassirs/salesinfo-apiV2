@@ -6,11 +6,12 @@ snapshot publishing.
 import asyncio
 import contextlib
 import logging
-import os
 from dataclasses import replace
 from typing import Any, Dict, Optional
 
 from core.app.lifecycle.base import LifecycleStep
+from core.app.settings import AppSettings
+from core.config_env import env_flag as _env_flag
 
 # Optional: this codebase's core.performance instrumentation (tracing,
 # metrics, pool/SQL adapters, resource collectors — see
@@ -35,14 +36,6 @@ except Exception:
     OTelExporter = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
-
-
-def _env_flag(name: str, default: bool = False) -> bool:
-    """Parse a boolean env var, matching PerformanceConfig._read_bool's rules."""
-    value = os.getenv(name)
-    if value is None:
-        return default
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 class PerformanceStep(LifecycleStep):
@@ -86,7 +79,7 @@ class PerformanceStep(LifecycleStep):
 
     Cross-process snapshot publishing: with `--workers N > 1`, each
     worker is a separate process with its own registry — see
-    `core.performance.cross_process`'s module docstring for why that
+    `core.performance.adapters.cross_process`'s module docstring for why that
     used to make `/debug/performance` only ever show one worker's
     slice of traffic. This step also starts a loop that periodically
     publishes this worker's own summary to Postgres (shared by every
@@ -100,11 +93,29 @@ class PerformanceStep(LifecycleStep):
 
     name = "performance"
 
-    def __init__(self, container: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        container: Optional[Any] = None,
+        *,
+        settings: AppSettings,
+    ) -> None:
         self.scheduler: Optional[Any] = None
         self._otel_export_task: Optional["asyncio.Task[None]"] = None
         self._snapshot_publish_task: Optional["asyncio.Task[None]"] = None
         self._container = container
+        # Required, not Optional: this is an application integration
+        # component (core.app.lifecycle), not part of the standalone,
+        # reusable core.performance package itself -- see this class's
+        # docstring and the framework review's "standalone classes
+        # versus application classes" distinction. There used to be an
+        # `if self.settings is not None else os.getenv(...)` fallback
+        # here; every real construction site always passed settings
+        # anyway (ApplicationLifespan.__init__ requires it too), so the
+        # fallback path was dead in production and only weakened the
+        # "AppSettings.from_env() is the one place that reads the
+        # environment" invariant. Tests that want standalone behavior
+        # now construct an explicit `AppSettings(...)` instead.
+        self.settings = settings
 
     def startup_sync(self) -> Dict[str, Any]:
         if PerformanceConfig is None or get_default_registry is None:
@@ -150,9 +161,7 @@ class PerformanceStep(LifecycleStep):
             and OTelExporter is not None
             and _env_flag("PERF_EXPORT_OTEL", default=True)
         ):
-            interval_seconds = float(
-                os.getenv("PERF_OTEL_EXPORT_INTERVAL_SECONDS", "15")
-            )
+            interval_seconds = self.settings.perf_otel_export_interval_seconds
             self._otel_export_task = asyncio.ensure_future(
                 self._run_otel_export(registry, interval_seconds)
             )
@@ -170,8 +179,8 @@ class PerformanceStep(LifecycleStep):
         # construct just skips this, same as they already skip the
         # OTel export loop if OTelExporter isn't importable).
         if config.enabled and self._container is not None:
-            publish_interval_seconds = float(
-                os.getenv("PERF_CROSS_PROCESS_PUBLISH_INTERVAL_SECONDS", "2")
+            publish_interval_seconds = (
+                self.settings.perf_cross_process_publish_interval_seconds
             )
             self._snapshot_publish_task = asyncio.ensure_future(
                 self._run_snapshot_publish(
@@ -223,12 +232,12 @@ class PerformanceStep(LifecycleStep):
         # import guard above): core.performance itself might be absent
         # in a stripped-down environment even when this loop is asked
         # to run, and there's no point failing startup over it.
-        from core.performance.cross_process import WorkerSnapshotStore
+        from core.performance.adapters.cross_process import WorkerSnapshotStore
         from core.performance.dashboard.summary import build_performance_summary
 
         store: Optional[WorkerSnapshotStore] = None
         while True:
-            application_state = container.get_application_state()
+            application_state = container.application_state
             if application_state is not None:
                 if store is None:
                     store = WorkerSnapshotStore(application_state)

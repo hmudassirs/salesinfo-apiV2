@@ -144,7 +144,7 @@ class AuditTrail:
             timestamp, event_type, user_id, session_id, ip_address, user_agent,
             resource_type, resource_id, action, old_values, new_values,
             success, error_message, metadata
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
         params = (
@@ -169,8 +169,8 @@ class AuditTrail:
                 self.application_state.execute_on(_adapter, sql, params)
             else:
                 self.application_state.execute(sql, params)
-        except Exception as e:
-            logger.error(f"Failed to log audit event: {e}")
+        except Exception:
+            logger.exception("Failed to log audit event")
 
     def get_audit_events(
         self,
@@ -206,35 +206,35 @@ class AuditTrail:
         params = []
 
         if event_type:
-            conditions.append("event_type = ?")
+            conditions.append("event_type = %s")
             params.append(event_type)
 
         if user_id:
-            conditions.append("user_id = ?")
+            conditions.append("user_id = %s")
             params.append(user_id)
 
         if resource_type:
-            conditions.append("resource_type = ?")
+            conditions.append("resource_type = %s")
             params.append(resource_type)
 
         if resource_id:
-            conditions.append("resource_id = ?")
+            conditions.append("resource_id = %s")
             params.append(resource_id)
 
         if action:
-            conditions.append("action = ?")
+            conditions.append("action = %s")
             params.append(action)
 
         if start_time:
-            conditions.append("timestamp >= ?")
+            conditions.append("timestamp >= %s")
             params.append(start_time)
 
         if end_time:
-            conditions.append("timestamp <= ?")
+            conditions.append("timestamp <= %s")
             params.append(end_time)
 
         if success is not None:
-            conditions.append("success = ?")
+            conditions.append("success = %s")
             params.append(success)
 
         where_clause = " AND ".join(conditions) if conditions else "1=1"
@@ -243,7 +243,7 @@ class AuditTrail:
         SELECT * FROM audit_log
         WHERE {where_clause}
         ORDER BY timestamp DESC
-        LIMIT ? OFFSET ?
+        LIMIT %s OFFSET %s
         """
 
         params.extend([limit, offset])
@@ -258,12 +258,16 @@ class AuditTrail:
                     if event_dict.get(field):
                         try:
                             event_dict[field] = json.loads(event_dict[field])
-                        except:
+                        except (TypeError, ValueError):
+                            # Malformed/non-JSON stored value -- see
+                            # the matching comment in
+                            # core.observability.request_tracer for why
+                            # this is deliberately narrow, not bare.
                             event_dict[field] = None
                     else:
                         event_dict[field] = None
                 events.append(event_dict)
             return events
-        except Exception as e:
-            logger.error(f"Failed to retrieve audit events: {e}")
+        except Exception:
+            logger.exception("Failed to retrieve audit events")
             return []

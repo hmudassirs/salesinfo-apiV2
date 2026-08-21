@@ -2,21 +2,14 @@ import heapq
 import threading
 from typing import Any, Dict, List, Tuple
 
+from core.db.logger import get_logger
+
 from .adaptive import AdaptiveSizer
 from .base import ConnectionState, MaxConnectionsExceeded, PoolConnection, now
-from .metrics import PoolMetrics
+from .metrics import PoolMetrics, build_pool_metrics
+from .policy import best_effort_close_sync, new_wait_histogram, record_wait
 
-try:
-    from core.performance.histogram import StreamingHistogram
-    from core.performance.types import MetricName
-
-    def _new_wait_histogram() -> "StreamingHistogram":
-        return StreamingHistogram(name=MetricName("pool_wait_ms"))
-except Exception:  # core.performance not installed -- degrade gracefully
-    StreamingHistogram = None  # type: ignore[assignment,misc]
-
-    def _new_wait_histogram():
-        return None
+logger = get_logger(__name__)
 
 
 class SyncConnectionPool:
@@ -56,7 +49,7 @@ class SyncConnectionPool:
         # for the classifier, and core/db/session.py for where it's applied.
         self._broken_evicted = 0
 
-        self._wait_histogram = _new_wait_histogram()
+        self._wait_histogram = new_wait_histogram()
         self._recent_waits_ms: List[float] = []
         self._recent_window = 50
 
@@ -135,12 +128,12 @@ class SyncConnectionPool:
         self._successful_acquires += 1
         if hit:
             self._hits += 1
-        wait_ms = wait * 1000.0
-        if self._wait_histogram is not None:
-            self._wait_histogram.observe(wait_ms)
-        self._recent_waits_ms.append(wait_ms)
-        if len(self._recent_waits_ms) > self._recent_window:
-            self._recent_waits_ms.pop(0)
+        record_wait(
+            wait_histogram=self._wait_histogram,
+            recent_waits_ms=self._recent_waits_ms,
+            recent_window=self._recent_window,
+            wait_seconds=wait,
+        )
 
     def release(self, conn, *, broken: bool = False) -> None:
         """Return `conn` to the pool, or -- if `broken=True` -- discard
@@ -155,11 +148,9 @@ class SyncConnectionPool:
             if broken:
                 pc.state = ConnectionState.BROKEN
                 self._broken_evicted += 1
-                if hasattr(conn, "close"):
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass  # already broken; closing it is best-effort
+                best_effort_close_sync(
+                    conn, logger=logger, context="broken connection, already discarded"
+                )
             else:
                 pc.state = ConnectionState.IDLE
                 pc.consecutive_errors = 0
@@ -187,11 +178,7 @@ class SyncConnectionPool:
             self._in_use.clear()
 
         for conn in conns:
-            try:
-                if hasattr(conn, "close"):
-                    conn.close()
-            except Exception:
-                pass
+            best_effort_close_sync(conn, logger=logger, context="pool shutdown")
 
     def metrics(self) -> PoolMetrics:
         with self._lock:
@@ -205,47 +192,25 @@ class SyncConnectionPool:
                 recent_wait_ms=recent_avg_ms,
             )
 
-            avg_wait_ms = (
-                (self._wait_time / max(1, self._successful_acquires + self._timeouts))
-                * 1000.0
-            )
-            p50 = p95 = p99 = None
-            if self._wait_histogram is not None and self._wait_histogram.histogram.count:
-                snap = self._wait_histogram.snapshot()
-                p50, p95, p99 = snap.get("p50"), snap.get("p95"), snap.get("p99")
-
-            current_size = self._sizer.current
             active = len([v for v in self._in_use.values() if v is not None])
             reserved = len(self._in_use) - active
 
-            return {
-                "min_connections": self._sizer.min,
-                "max_connections": current_size,
-                "current_connections": active + len(self._available),
-                "active_connections": active,
-                "idle_connections": len(self._available),
-                "queue_depth": self._current_waiters,
-                "current_waiters": self._current_waiters,
-                "total_waiters": self._total_waiters_ever,
-                "total_requests": self._requests,
-                "total_acquires": self._requests,
-                "successful_acquires": self._successful_acquires,
-                "timed_out_acquires": self._timeouts,
-                "pool_hits": self._hits,
-                "pool_misses": self._misses,
-                "timeout_errors": self._timeouts,
-                "total_wait_time": round(self._wait_time, 4),
-                "avg_wait_time_ms": round(avg_wait_ms, 4),
-                "p50_wait_time_ms": p50,
-                "p95_wait_time_ms": p95,
-                "p99_wait_time_ms": p99,
-                "connection_creation_count": self._connection_creation_count,
-                "connection_creation_time_ms": round(
-                    self._connection_creation_time * 1000.0, 4
-                ),
-                "broken_connections_evicted": self._broken_evicted,
-                "utilization": round(active / max(1, current_size), 4),
-                "saturation": round(
-                    (active + reserved) / max(1, current_size), 4
-                ),
-            }
+            return build_pool_metrics(
+                min_connections=self._sizer.min,
+                current_size=self._sizer.current,
+                active=active,
+                idle=len(self._available),
+                reserved=reserved,
+                current_waiters=self._current_waiters,
+                total_waiters=self._total_waiters_ever,
+                requests=self._requests,
+                successful_acquires=self._successful_acquires,
+                timeouts=self._timeouts,
+                hits=self._hits,
+                misses=self._misses,
+                wait_time=self._wait_time,
+                wait_histogram=self._wait_histogram,
+                connection_creation_count=self._connection_creation_count,
+                connection_creation_time=self._connection_creation_time,
+                broken_evicted=self._broken_evicted,
+            )
