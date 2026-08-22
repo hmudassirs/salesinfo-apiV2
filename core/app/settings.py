@@ -240,14 +240,14 @@ class AppSettings:
         )
 
     @classmethod
-    def from_env(cls) -> "AppSettings":
+    def from_env(cls, *, require_jwt_secret: bool = True) -> "AppSettings":
         """Create settings from environment variables.
 
         Returns:
             AppSettings instance
 
         Raises:
-            RuntimeError: If JWT_SECRET_KEY is not set, if CORS is
+            RuntimeError: If JWT_SECRET_KEY is not set when required, if CORS is
                 configured with both a wildcard origin and credentials
                 enabled (an insecure, browser-rejected combination), or
                 if `validate()` finds any other invalid combination
@@ -261,12 +261,12 @@ class AppSettings:
         from core.config_env import env_flag, env_float, env_int
 
         jwt_secret_key = os.getenv("JWT_SECRET_KEY")
-        if not jwt_secret_key:
+        if require_jwt_secret and not jwt_secret_key:
             raise RuntimeError(
                 "JWT_SECRET_KEY environment variable must be set. "
                 "Refusing to start with no signing secret or a hardcoded default."
             )
-        if len(jwt_secret_key.encode()) < 32:
+        if jwt_secret_key and len(jwt_secret_key.encode()) < 32:
             logger.warning(
                 "JWT_SECRET_KEY is only %d bytes; RFC 7518 recommends at least 32 "
                 "for HS256. Generate a proper one, e.g.: "
@@ -404,10 +404,10 @@ class AppSettings:
             pool=pool,
             executors=executors,
         )
-        settings.validate()
+        settings.validate(require_jwt_secret=require_jwt_secret)
         return settings
 
-    def validate(self) -> None:
+    def validate(self, *, require_jwt_secret: bool = True) -> None:
         """Fail fast on configuration that would otherwise surface as a
         confusing runtime error minutes or hours after startup (framework
         review item "configuration: needs production validation" /
@@ -506,7 +506,7 @@ class AppSettings:
                 _positive(value, label)
 
         # --- JWT ---
-        if not self.jwt_secret_key:
+        if require_jwt_secret and not self.jwt_secret_key:
             errors.append("jwt_secret_key must be set")
         _positive(self.jwt_expiry_seconds, "jwt_expiry_seconds")
         if self.jwt_algorithm not in {"HS256", "HS384", "HS512", "RS256", "RS384", "RS512"}:

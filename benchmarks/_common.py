@@ -25,11 +25,41 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, cast
 
+# Match the application runner: environment-backed settings must be loaded
+# before importing core modules that initialize process-wide infrastructure.
+from dotenv import load_dotenv
+
+load_dotenv(".env.dev")
+
+from core.app.settings import AppSettings
+from core.db.config import DatabaseConfig
+from core.storage.application_state_store import ApplicationStateStore
+
 if TYPE_CHECKING:
     from core.performance.registry import PerformanceRegistry
     from core.performance.trace import TraceNode
 
 _PERCENTILES = (50, 90, 95, 99)
+
+
+def build_application_state_store(settings: AppSettings) -> ApplicationStateStore:
+    """Build the benchmark state store from the application's settings."""
+    database = settings.database
+    database_config = DatabaseConfig.from_postgresql(
+        dsn=database.dsn,
+        host=database.host,
+        port=database.port,
+        database=database.database,
+        user=database.user,
+        password=database.password,
+        sslmode=database.sslmode,
+    )
+    return ApplicationStateStore.for_postgres(
+        min_size=settings.pool.application_state_min_size,
+        max_size=settings.pool.application_state_max_size,
+        timeout=settings.pool.timeout,
+        **database_config.extra_options,
+    )
 
 
 @dataclass(frozen=True, slots=True)

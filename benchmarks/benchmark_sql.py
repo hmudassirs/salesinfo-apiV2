@@ -13,8 +13,9 @@ Compares, against a real PostgreSQL database seeded with 200 rows:
 
 Needs a reachable PostgreSQL server -- the application state store has no
 other backend (see core/storage/application_state_store.py's module docstring).
-Point it at one with the same PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD
-env vars run_api.py uses (defaults: localhost:5432/postgres/postgres).
+Configure its database through the same `AppSettings.from_env()` path as
+run_api.py (the `DATABASE_URL` or `PG*` environment variables; defaults:
+localhost:5432/postgres/postgres).
 Seeded rows are cleaned up (best-effort) after each run, so this is
 safe to point at a real database, not just a disposable local one.
 
@@ -25,14 +26,14 @@ Usage:
 
 from __future__ import annotations
 
-import os
-
 from benchmarks._common import (
+    build_application_state_store,
     build_arg_parser,
     render_report,
     run_benchmark,
     write_json_results,
 )
+from core.app.settings import AppSettings
 from core.performance.adapters.application_state import InstrumentedApplicationStateStore
 from core.performance.context import bind_profiler
 from core.performance.request_profiler import RequestProfiler
@@ -40,29 +41,19 @@ from core.storage.application_state_store import ApplicationStateStore
 from core.storage.schema import ApplicationStateSchema
 
 _SEED_ROWS = 200
-_SELECT_SQL = "SELECT username FROM users WHERE user_id = ?"
+_SELECT_SQL = "SELECT username FROM users WHERE user_id = %s"
 _USER_ID_PREFIX = "benchmark_sql_u"
 
 
-def _pg_kwargs() -> dict:
-    return {
-        "host": os.getenv("PGHOST", "localhost"),
-        "port": int(os.getenv("PGPORT", "5432")),
-        "database": os.getenv("PGDATABASE", "postgres"),
-        "user": os.getenv("PGUSER", "postgres"),
-        "password": os.getenv("PGPASSWORD", ""),
-    }
-
-
-def _build_seeded_database() -> ApplicationStateStore:
-    db = ApplicationStateStore.for_postgres(min_size=2, max_size=8, **_pg_kwargs())
+def _build_seeded_database(settings: AppSettings) -> ApplicationStateStore:
+    db = build_application_state_store(settings)
     db.connect()
     ApplicationStateSchema(db).create()
     for i in range(_SEED_ROWS):
         db.execute(
             "INSERT INTO users "
             "(user_id, username, email, password_hash, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
             "ON CONFLICT (user_id) DO NOTHING",
             (
                 f"{_USER_ID_PREFIX}{i}",
@@ -78,17 +69,18 @@ def _build_seeded_database() -> ApplicationStateStore:
 
 def _cleanup_seeded_rows(db: ApplicationStateStore) -> None:
     db.execute(
-        "DELETE FROM users WHERE user_id LIKE ?", (f"{_USER_ID_PREFIX}%",)
+        "DELETE FROM users WHERE user_id LIKE %s", (f"{_USER_ID_PREFIX}%",)
     )
 
 
 def main() -> None:
     parser = build_arg_parser(__doc__ or "")
     args = parser.parse_args()
+    settings = AppSettings.from_env(require_jwt_secret=False)
 
-    raw_db = _build_seeded_database()
-    instrumented_db = InstrumentedApplicationStateStore(_build_seeded_database())
-    profiled_db = InstrumentedApplicationStateStore(_build_seeded_database())
+    raw_db = _build_seeded_database(settings)
+    instrumented_db = InstrumentedApplicationStateStore(_build_seeded_database(settings))
+    profiled_db = InstrumentedApplicationStateStore(_build_seeded_database(settings))
 
     def _run_profiled() -> None:
         with bind_profiler(RequestProfiler()):

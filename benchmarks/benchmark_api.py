@@ -29,13 +29,13 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import os
 
 import httpx
 from fastapi import FastAPI
 
 from benchmarks._common import (
     BenchmarkResult,
+    build_application_state_store,
     build_arg_parser,
     compare,
     render_report,
@@ -43,6 +43,7 @@ from benchmarks._common import (
     stage_breakdown,
     write_json_results,
 )
+from core.app.settings import AppSettings
 from core.performance.adapters.application_state import InstrumentedApplicationStateStore
 from core.performance.config import PerformanceConfig
 from core.performance.middleware.fastapi import install_performance_middleware
@@ -50,43 +51,35 @@ from core.performance.registry import PerformanceRegistry
 from core.storage.application_state_store import ApplicationStateStore
 from core.storage.schema import ApplicationStateSchema
 
-_SELECT_SQL = "SELECT username FROM users WHERE user_id = ?"
+_SELECT_SQL = "SELECT username FROM users WHERE user_id = %s"
 _USER_ID = "benchmark_api_u1"
 
 
-def _pg_kwargs() -> dict:
-    return {
-        "host": os.getenv("PGHOST", "localhost"),
-        "port": int(os.getenv("PGPORT", "5432")),
-        "database": os.getenv("PGDATABASE", "postgres"),
-        "user": os.getenv("PGUSER", "postgres"),
-        "password": os.getenv("PGPASSWORD", ""),
-    }
-
-
-def _build_seeded_database() -> ApplicationStateStore:
+def _build_seeded_database(settings: AppSettings) -> ApplicationStateStore:
     """Needs a reachable PostgreSQL server -- the application state store has
     no other backend (see core/storage/application_state_store.py's module
-    docstring). Point it at one with PGHOST/PGPORT/PGDATABASE/PGUSER/
-    PGPASSWORD, same as run_api.py (defaults: localhost:5432/postgres/
-    postgres)."""
-    db = ApplicationStateStore.for_postgres(min_size=2, max_size=8, **_pg_kwargs())
+    docstring). Configure it through the same `AppSettings.from_env()` path
+    as run_api.py (the `DATABASE_URL` or `PG*` environment variables;
+    defaults: localhost:5432/postgres/postgres)."""
+    db = build_application_state_store(settings)
     db.connect()
     ApplicationStateSchema(db).create()
     db.execute(
         "INSERT INTO users "
         "(user_id, username, email, password_hash, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?) "
+        "VALUES (%s, %s, %s, %s, %s, %s) "
         "ON CONFLICT (user_id) DO NOTHING",
         (_USER_ID, "benchmark_api_alice", "benchmark_api_alice@example.com", "hash", 1, 1),
     )
     return db
 
 
-def _build_app(config: PerformanceConfig, registry: PerformanceRegistry) -> FastAPI:
+def _build_app(
+    config: PerformanceConfig, registry: PerformanceRegistry, settings: AppSettings
+) -> FastAPI:
     app = FastAPI()
     install_performance_middleware(app, config=config, registry=registry)
-    instrumented_db = InstrumentedApplicationStateStore(_build_seeded_database())
+    instrumented_db = InstrumentedApplicationStateStore(_build_seeded_database(settings))
     app.state.application_state = instrumented_db.application_state  # for cleanup in _run_named
 
     @app.get("/fast")
@@ -139,16 +132,20 @@ async def _drive_load(
 
 
 async def _run_named(
-    name: str, config: PerformanceConfig, iterations: int, concurrency: int
+    name: str,
+    config: PerformanceConfig,
+    settings: AppSettings,
+    iterations: int,
+    concurrency: int,
 ) -> tuple[BenchmarkResult, PerformanceRegistry]:
     registry = PerformanceRegistry()
-    app = _build_app(config, registry)
+    app = _build_app(config, registry, settings)
     loop_start = asyncio.get_running_loop().time()
     try:
         durations, errors = await _drive_load(app, iterations, concurrency)
     finally:
         application_state: ApplicationStateStore = app.state.application_state
-        application_state.execute("DELETE FROM users WHERE user_id = ?", (_USER_ID,))
+        application_state.execute("DELETE FROM users WHERE user_id = %s", (_USER_ID,))
         application_state.disconnect()
     total_seconds = asyncio.get_running_loop().time() - loop_start
     result = BenchmarkResult(
@@ -161,15 +158,18 @@ async def _run_named(
     return result, registry
 
 
-async def _main_async(iterations: int, concurrency: int) -> tuple[
+async def _main_async(
+    settings: AppSettings, iterations: int, concurrency: int
+) -> tuple[
     list[BenchmarkResult], dict[str, dict[str, float]]
 ]:
     baseline_result, _baseline_registry = await _run_named(
-        "baseline", PerformanceConfig(enabled=False), iterations, concurrency
+        "baseline", PerformanceConfig(enabled=False), settings, iterations, concurrency
     )
     candidate_result, candidate_registry = await _run_named(
         "candidate",
         PerformanceConfig(enabled=True, sample_rate_percent=100),
+        settings,
         iterations,
         concurrency,
     )
@@ -182,8 +182,11 @@ def main() -> None:
         "--concurrency", type=int, default=10, help="Concurrent in-flight requests."
     )
     args = parser.parse_args()
+    settings = AppSettings.from_env(require_jwt_secret=False)
 
-    results, breakdown = asyncio.run(_main_async(args.iterations, args.concurrency))
+    results, breakdown = asyncio.run(
+        _main_async(settings, args.iterations, args.concurrency)
+    )
 
     print(render_report(results))  # noqa: T201
     print()  # noqa: T201
